@@ -1,0 +1,6 @@
+@ProfetAPI_HostAddress = http://localhost:5051
+
+GET {{ProfetAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
