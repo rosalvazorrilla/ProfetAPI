@@ -90,3 +90,92 @@ GO
 ALTER TABLE dbo.UserRoles
 ADD CONSTRAINT FK_UserRoles_Roles FOREIGN KEY (RoleId) REFERENCES dbo.Roles(Id);
 GO
+
+--Planes
+
+CREATE TABLE dbo.Plans (
+    PlanId INT PRIMARY KEY IDENTITY(1,1), 
+    Name NVARCHAR(100) NOT NULL, 
+    Description NVARCHAR(1000) NULL,
+    IsPublic BIT NOT NULL DEFAULT 1, 
+    IsActive BIT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE dbo.Features (
+    FeatureId INT PRIMARY KEY IDENTITY(1,1), 
+    FeatureCode NVARCHAR(100) NOT NULL UNIQUE, 
+    Name NVARCHAR(255) NOT NULL, 
+    Description NVARCHAR(1000) NULL
+);
+
+CREATE TABLE dbo.AddOns (
+    AddOnId INT PRIMARY KEY IDENTITY(1,1), 
+    FeatureId INT NOT NULL, 
+    Name NVARCHAR(255) NOT NULL, 
+    Description NVARCHAR(1000) NULL,
+    Price DECIMAL(18, 2) NOT NULL, 
+    BillingCycle NVARCHAR(50) NOT NULL,
+    CONSTRAINT FK_AddOns_Features FOREIGN KEY (FeatureId) REFERENCES dbo.Features(FeatureId)
+);
+
+
+CREATE TABLE dbo.PlanPriceHistory (
+    PriceHistoryId INT PRIMARY KEY IDENTITY(1,1), 
+    PlanId INT NOT NULL, 
+    MonthlyPrice DECIMAL(18, 2) NOT NULL, 
+    AnnualPrice DECIMAL(18, 2) NOT NULL,
+    EffectiveDate DATETIME2 NOT NULL, 
+    EndDate DATETIME2 NULL,
+    CONSTRAINT FK_PlanPriceHistory_Plans FOREIGN KEY (PlanId) REFERENCES dbo.Plans(PlanId)
+);
+
+
+CREATE TABLE dbo.PlanFeatures (
+    PlanId INT NOT NULL, FeatureId INT NOT NULL, 
+    Limit NVARCHAR(100) NULL,
+    CONSTRAINT PK_PlanFeatures PRIMARY KEY (PlanId, FeatureId),
+    CONSTRAINT FK_PlanFeatures_Plans FOREIGN KEY (PlanId) REFERENCES dbo.Plans(PlanId),
+    CONSTRAINT FK_PlanFeatures_Features FOREIGN KEY (FeatureId) REFERENCES dbo.Features(FeatureId)
+);
+
+CREATE TABLE dbo.Subscriptions (
+    SubscriptionId INT PRIMARY KEY IDENTITY(1,1), 
+    CustomerId INT NOT NULL, 
+    PlanId INT NOT NULL, Status NVARCHAR(50) NOT NULL,
+    PriceAgreed DECIMAL(18, 2) NOT NULL, 
+    BillingCycle NVARCHAR(50) NOT NULL,
+    DiscountAmount DECIMAL(18, 2) NOT NULL DEFAULT 0,
+    TrialEndDate DATETIME2 NULL, 
+    SubscriptionStartDate DATETIME2 NOT NULL, 
+    CanceledDate DATETIME2 NULL,
+    CONSTRAINT FK_Subscriptions_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(id),
+    CONSTRAINT FK_Subscriptions_Plans FOREIGN KEY (PlanId) REFERENCES dbo.Plans(PlanId)
+);
+
+CREATE TABLE dbo.SubscriptionPeriods (
+    PeriodId INT PRIMARY KEY IDENTITY(1,1), 
+    SubscriptionId INT NOT NULL, 
+    PeriodStartDate DATETIME2 NOT NULL, 
+    PeriodEndDate DATETIME2 NOT NULL,
+    AmountBilled DECIMAL(18, 2) NOT NULL, 
+    Status NVARCHAR(50) NOT NULL, 
+    PaymentDate DATETIME2 NULL, 
+    InvoiceUrl NVARCHAR(500) NULL,
+    CONSTRAINT FK_SubscriptionPeriods_Subscriptions FOREIGN KEY (SubscriptionId) REFERENCES dbo.Subscriptions(SubscriptionId)
+);
+
+CREATE TABLE dbo.CustomerPurchasedAddOns (
+    PurchasedAddOnId INT PRIMARY KEY IDENTITY(1,1), 
+    SubscriptionId INT NOT NULL, 
+    AddOnId INT NOT NULL, 
+    PricePaid DECIMAL(18, 2) NOT NULL,
+    PurchaseDate DATETIME2 NOT NULL, 
+    ExpiryDate DATETIME2 NULL,
+    CONSTRAINT FK_PurchasedAddOns_Subscriptions FOREIGN KEY (SubscriptionId) REFERENCES dbo.Subscriptions(SubscriptionId),
+    CONSTRAINT FK_PurchasedAddOns_AddOns FOREIGN KEY (AddOnId) REFERENCES dbo.AddOns(AddOnId)
+);
+
+DROP TABLE dbo.ManagerAdminRelations;
+GO
+DROP TABLE dbo.ManagerRelations;
+GO
