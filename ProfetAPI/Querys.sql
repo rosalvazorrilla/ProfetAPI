@@ -179,3 +179,244 @@ DROP TABLE dbo.ManagerAdminRelations;
 GO
 DROP TABLE dbo.ManagerRelations;
 GO
+
+--Accounts
+
+BEGIN TRANSACTION; -- Iniciamos una transacción para asegurar que todo se ejecute correctamente o nada.
+GO
+
+PRINT '--- PASO 1: Creando las nuevas tablas de soporte para Accounts ---';
+
+-- 1.1: Crear la tabla para los usuarios internos (SalesRep, PM)
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[AccountInternalUsers]') AND type in (N'U'))
+BEGIN
+    CREATE TABLE dbo.AccountInternalUsers (
+        AccountId INT NOT NULL,
+        UserId NVARCHAR(128) NOT NULL,
+        RoleInAccount NVARCHAR(100) NOT NULL, -- 'SalesRep' o 'ProjectManager'
+        CONSTRAINT PK_AccountInternalUsers PRIMARY KEY (AccountId, UserId, RoleInAccount)
+    );
+    PRINT 'Tabla AccountInternalUsers creada.';
+END
+ELSE
+BEGIN
+    PRINT 'Tabla AccountInternalUsers ya existe.';
+END
+GO
+
+-- 1.2: Crear la tabla para los destinatarios de notificaciones
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[AccountNotificationRecipients]') AND type in (N'U'))
+BEGIN
+    CREATE TABLE dbo.AccountNotificationRecipients (
+        RecipientId INT PRIMARY KEY IDENTITY(1,1),
+        AccountId INT NOT NULL,
+        Email NVARCHAR(255) NOT NULL,
+        IsActive BIT NOT NULL DEFAULT 1
+    );
+    PRINT 'Tabla AccountNotificationRecipients creada.';
+END
+ELSE
+BEGIN
+    PRINT 'Tabla AccountNotificationRecipients ya existe.';
+END
+GO
+
+-- ####################################################################
+
+PRINT '--- PASO 2: Creando la nueva tabla Accounts ---';
+IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[Accounts]') AND type in (N'U'))
+BEGIN
+    CREATE TABLE dbo.Accounts (
+        AccountId INT PRIMARY KEY IDENTITY(1,1),
+        Name NVARCHAR(MAX) NOT NULL,
+        Description NVARCHAR(MAX) NULL,
+        CustomerId INT NOT NULL,
+        
+        -- Configuraciones
+        LandingUrl VARCHAR(200) NULL,
+        AssignmentType VARCHAR(100) NULL,
+        AssignmentUserId NVARCHAR(128) NULL,
+        
+        -- Paquetes de Configuración (FKs a otras tablas)
+        LeadLostReasonsPackagesId INT NULL,
+        LeadDealsTypesPackagesId INT NULL,
+        ActivitiesTemplateId INT NULL,
+        
+        -- Estado y Fechas
+        Status NVARCHAR(50) NOT NULL DEFAULT 'Por Iniciar', -- Estado en Español como acordamos
+        CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+    );
+    PRINT 'Tabla Accounts creada.';
+END
+ELSE
+BEGIN
+    PRINT 'Tabla Accounts ya existe.';
+END
+GO
+
+-- ####################################################################
+
+PRINT '--- PASO 3: Migrando datos de Campaigns a Accounts y sus tablas de soporte ---';
+
+-- 3.1: Migrar los datos principales a la tabla Accounts
+-- Se usa SET IDENTITY_INSERT para mantener los IDs originales y facilitar la migración de tablas dependientes.
+SET IDENTITY_INSERT dbo.Accounts ON;
+
+INSERT INTO dbo.Accounts (
+    AccountId, Name, Description, CustomerId, LandingUrl, AssignmentType, AssignmentUserId, 
+    LeadLostReasonsPackagesId, LeadDealsTypesPackagesId, ActivitiesTemplateId, 
+    Status, CreatedOn
+)
+SELECT 
+    Id, Name, Description, CustomerId, LandingUrl, AssignmentType, AssignmentUser, 
+    LeadLostReasonsPackagesId, LeadDealsTypesPackagesId, ActivitiesTemplateId,
+    CASE WHEN Deleted = 1 THEN 'Archivado' WHEN active = 0 THEN 'Pausado' ELSE 'Activo' END, -- Mapeamos el estado
+    ISNULL(Date, GETDATE())
+FROM dbo.Campaigns c
+WHERE NOT EXISTS (SELECT 1 FROM dbo.Accounts a WHERE a.AccountId = c.Id); -- Evitar duplicados si se corre de nuevo
+
+SET IDENTITY_INSERT dbo.Accounts OFF;
+PRINT 'Datos de Campaigns migrados a Accounts.';
+GO
+
+-- 3.2: Migrar los usuarios internos (asumiendo que los campos guardan el UserId)
+INSERT INTO dbo.AccountInternalUsers (AccountId, UserId, RoleInAccount)
+SELECT Id, SalesRep, 'SalesRep'
+FROM dbo.Campaigns
+WHERE SalesRep IS NOT NULL AND LEN(SalesRep) > 1
+AND NOT EXISTS (SELECT 1 FROM dbo.AccountInternalUsers WHERE AccountId = Id AND UserId = SalesRep AND RoleInAccount = 'SalesRep');
+
+INSERT INTO dbo.AccountInternalUsers (AccountId, UserId, RoleInAccount)
+SELECT Id, AccountMgmt, 'ProjectManager'
+FROM dbo.Campaigns
+WHERE AccountMgmt IS NOT NULL AND LEN(AccountMgmt) > 1
+AND NOT EXISTS (SELECT 1 FROM dbo.AccountInternalUsers WHERE AccountId = Id AND UserId = AccountMgmt AND RoleInAccount = 'ProjectManager');
+PRINT 'Usuarios internos migrados.';
+GO
+
+-- 3.3: Migrar los correos de notificación (parseando el texto)
+INSERT INTO dbo.AccountNotificationRecipients (AccountId, Email)
+SELECT Id, value
+FROM dbo.Campaigns
+CROSS APPLY STRING_SPLIT(EmailLeadBooster, ',')
+WHERE EmailLeadBooster IS NOT NULL AND LTRIM(RTRIM(value)) <> '';
+PRINT 'Correos de notificación migrados.';
+GO
+
+
+-- ####################################################################
+
+PRINT '--- PASO 4: Evolucionando CampaingsActiveDates a AccountStatusHistory ---';
+
+-- 4.1: Renombrar la tabla y la columna
+EXEC sp_rename 'dbo.CampaingsActiveDates', 'AccountStatusHistory';
+EXEC sp_rename 'dbo.AccountStatusHistory.id_campaign', 'AccountId', 'COLUMN';
+GO
+
+-- 4.2: Añadir la columna de estado y poblarla
+ALTER TABLE dbo.AccountStatusHistory ADD Status NVARCHAR(50) NOT NULL DEFAULT 'Activo';
+PRINT 'Tabla CampaingsActiveDates evolucionada a AccountStatusHistory.';
+GO
+
+-- ####################################################################
+
+PRINT '--- PASO 5: Añadiendo las llaves foráneas finales ---';
+
+ALTER TABLE dbo.Accounts
+ADD CONSTRAINT FK_Accounts_Customers FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(id);
+GO
+ALTER TABLE dbo.AccountInternalUsers
+ADD CONSTRAINT FK_AccountInternalUsers_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId) ON DELETE CASCADE;
+GO
+ALTER TABLE dbo.AccountInternalUsers
+ADD CONSTRAINT FK_AccountInternalUsers_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(Id) ON DELETE CASCADE;
+GO
+ALTER TABLE dbo.AccountNotificationRecipients
+ADD CONSTRAINT FK_AccountNotificationRecipients_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId) ON DELETE CASCADE;
+GO
+ALTER TABLE dbo.AccountStatusHistory
+ADD CONSTRAINT FK_AccountStatusHistory_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId) ON DELETE CASCADE;
+GO
+
+PRINT '--- Todas las llaves foráneas han sido añadidas. ---';
+
+-- ####################################################################
+
+PRINT '--- PASO 6 (OPCIONAL): Limpieza Final ---';
+PRINT 'Verifica que todos los datos se hayan migrado correctamente antes de ejecutar este paso.';
+/*
+-- 6.1: Re-cablear todas las tablas que dependían de 'Campaigns' para que apunten a 'Accounts'.
+-- Ejemplo para la tabla 'Leads':
+ALTER TABLE dbo.Leads ADD AccountId INT NULL;
+GO
+UPDATE dbo.Leads SET AccountId = CampaignId;
+GO
+ALTER TABLE dbo.Leads ADD CONSTRAINT FK_Leads_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+GO
+-- **DEBES REPETIR ESTE PATRÓN PARA TODAS LAS TABLAS DEPENDIENTES ANTES DE BORRAR CAMPAIGNS**
+-- Tablas a revisar: CampaignIndustries, CampaignSettings, CampaignUsers, Reports, Webhooks, Teams, etc.
+
+
+-- 6.2: Eliminar la tabla 'Campaigns' obsoleta
+PRINT '*** ¡ADVERTENCIA! El siguiente paso es irreversible. ***';
+-- DROP TABLE dbo.Campaigns;
+
+*/
+
+COMMIT TRANSACTION; -- Si todo salió bien, confirmamos los cambios.
+GO
+
+PRINT '--- Proceso completado exitosamente. ---';
+
+
+PRINT '--- Módulo 2: Adaptando Funnels y Stages existentes... ---';
+
+-- ####################################################################
+-- ### PASO 2.1: CREAR LAS NUEVAS TABLAS PARA LA FUNCIONALIDAD DE PLANTILLAS
+-- ### Estas tablas se crearán vacías, listas para que las uses como una nueva característica.
+-- ####################################################################
+PRINT '--- Creando tablas para la nueva funcionalidad de Plantillas de Funnels... ---';
+
+CREATE TABLE dbo.FunnelTemplates (
+    TemplateId INT PRIMARY KEY IDENTITY(1,1),
+    Name NVARCHAR(255) NOT NULL,
+    Description NVARCHAR(1000) NULL
+);
+GO
+CREATE TABLE dbo.FunnelTemplateStages (
+    TemplateStageId INT PRIMARY KEY IDENTITY(1,1),
+    TemplateId INT NOT NULL,
+    StageName NVARCHAR(255) NOT NULL,
+    "Order" INT NOT NULL,
+    CONSTRAINT FK_FunnelTemplateStages_Templates FOREIGN KEY (TemplateId) REFERENCES dbo.FunnelTemplates(TemplateId) ON DELETE CASCADE
+);
+GO
+
+-- ####################################################################
+-- ### PASO 2.2: VINCULAR TUS FUNNELS EXISTENTES A LAS NUEVAS ACCOUNTS
+-- ### Mantenemos tus Funnels intactos y solo actualizamos su "dueño".
+-- ####################################################################
+PRINT '--- Vinculando Funnels existentes a las nuevas Accounts... ---';
+
+-- 1. Añadimos la columna AccountId a la tabla Funnels
+ALTER TABLE dbo.Funnels ADD AccountId INT NULL;
+GO
+
+-- 2. Migramos la relación: Asignamos cada Funnel a la Account correspondiente
+--    basándonos en el FunnelId que tenías en la vieja tabla Campaigns.
+UPDATE f
+SET f.AccountId = c.Id
+FROM dbo.Funnels f
+JOIN dbo.Campaigns c ON f.Id = c.FunnelId;
+GO
+
+-- 3. Creamos la llave foránea para formalizar la relación
+ALTER TABLE dbo.Funnels
+ADD CONSTRAINT FK_Funnels_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+GO
+
+-- 4. Nos aseguramos de que Stages siga bien conectada a Funnels
+ALTER TABLE dbo.Stages
+ADD CONSTRAINT FK_Stages_Funnels FOREIGN KEY (FunnelId) REFERENCES dbo.Funnels(Id);
+GO
+
