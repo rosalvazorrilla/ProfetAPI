@@ -42,12 +42,11 @@ SELECT
     isAdmin,
     NULL, -- LastLoginDate se llenará en el futuro
     -- Aquí construimos el JSON dinámicamente con los valores REALES de la tabla Users
-    CONCAT(
+   CONCAT(
         '{',
         '"alertAssignment":', 
         CASE WHEN ISNULL(alertAssignment, 0) = 1 THEN 'true' ELSE 'false' END, 
-        ',"hasWhatsApp":', 
-        CASE WHEN ISNULL(hasWhatsApp, 0) = 1 THEN 'true' ELSE 'false' END,
+        ',"hasWhatsApp":false', -- <-- Usamos 'false' como valor por defecto
         '}'
     ) AS Preferences
 FROM dbo.Users;
@@ -180,6 +179,30 @@ GO
 DROP TABLE dbo.ManagerRelations;
 GO
 
+
+-- ####################################################################
+-- ### 2. MEJORA: Limpieza Robusta y Correcta de la Tabla `Users`
+-- ### Reemplaza tu sección de limpieza de `Users` con este proceso de 2 partes.
+-- ####################################################################
+PRINT '--- Mejorando el proceso de limpieza de la tabla Users... ---';
+
+-- PARTE A: Generar los comandos para borrar los "candados" (default constraints) automáticamente.
+-- Esto evita errores y asegura que se borren todos, sin tener que buscarlos a mano.
+PRINT '--- PARTE A: Generando comandos para borrar CONSTRAINTS. Copia y ejecuta la salida de este bloque. ---';
+
+DECLARE @sql NVARCHAR(MAX) = N'';
+SELECT @sql += 'ALTER TABLE dbo.Users DROP CONSTRAINT ' + QUOTENAME(dc.name) + ';' + CHAR(13)
+FROM sys.default_constraints dc
+JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+WHERE dc.parent_object_id = OBJECT_ID('dbo.Users') AND c.name IN (
+    -- Esta es la lista correcta de columnas que se migraron o se volvieron obsoletas
+    'FirstName', 'LastName', 'Position', 'Address', 'Date', 'CompanyName', 'Phone', 'Web', 'Contact', 'PhoneExt', 
+    'Mobile', 'IndustrySector', 'TwilioNumber', 'cp_extension_name', 'cp_extension', 'cp_key', 'ProfilePicture', 
+    'Pass64', 'alertAssignment', 'isAdmin', 'canEdit' -- 'canEdit' estaba en tu script original
+);
+PRINT @sql;
+GO
+
 --Accounts
 
 BEGIN TRANSACTION; -- Iniciamos una transacción para asegurar que todo se ejecute correctamente o nada.
@@ -273,26 +296,26 @@ SELECT
     CASE WHEN Deleted = 1 THEN 'Archivado' WHEN active = 0 THEN 'Pausado' ELSE 'Activo' END, -- Mapeamos el estado
     ISNULL(Date, GETDATE())
 FROM dbo.Campaigns c
-WHERE NOT EXISTS (SELECT 1 FROM dbo.Accounts a WHERE a.AccountId = c.Id); -- Evitar duplicados si se corre de nuevo
+WHERE NOT EXISTS (SELECT 1 FROM dbo.Accounts a WHERE a.AccountId = c.Id) and CustomerId is not null; -- Evitar duplicados si se corre de nuevo
 
 SET IDENTITY_INSERT dbo.Accounts OFF;
 PRINT 'Datos de Campaigns migrados a Accounts.';
 GO
 
 -- 3.2: Migrar los usuarios internos (asumiendo que los campos guardan el UserId)
-INSERT INTO dbo.AccountInternalUsers (AccountId, UserId, RoleInAccount)
-SELECT Id, SalesRep, 'SalesRep'
-FROM dbo.Campaigns
-WHERE SalesRep IS NOT NULL AND LEN(SalesRep) > 1
-AND NOT EXISTS (SELECT 1 FROM dbo.AccountInternalUsers WHERE AccountId = Id AND UserId = SalesRep AND RoleInAccount = 'SalesRep');
+--INSERT INTO dbo.AccountInternalUsers (AccountId, UserId, RoleInAccount)
+--SELECT Id, SalesRep, 'SalesRep'
+--FROM dbo.Campaigns
+--WHERE SalesRep IS NOT NULL AND LEN(SalesRep) > 1
+--AND NOT EXISTS (SELECT 1 FROM dbo.AccountInternalUsers WHERE AccountId = Id AND UserId = SalesRep AND RoleInAccount = 'SalesRep');
 
-INSERT INTO dbo.AccountInternalUsers (AccountId, UserId, RoleInAccount)
-SELECT Id, AccountMgmt, 'ProjectManager'
-FROM dbo.Campaigns
-WHERE AccountMgmt IS NOT NULL AND LEN(AccountMgmt) > 1
-AND NOT EXISTS (SELECT 1 FROM dbo.AccountInternalUsers WHERE AccountId = Id AND UserId = AccountMgmt AND RoleInAccount = 'ProjectManager');
-PRINT 'Usuarios internos migrados.';
-GO
+--INSERT INTO dbo.AccountInternalUsers (AccountId, UserId, RoleInAccount)
+--SELECT Id, AccountMgmt, 'ProjectManager'
+--FROM dbo.Campaigns
+--WHERE AccountMgmt IS NOT NULL AND LEN(AccountMgmt) > 1
+--AND NOT EXISTS (SELECT 1 FROM dbo.AccountInternalUsers WHERE AccountId = Id AND UserId = AccountMgmt AND RoleInAccount = 'ProjectManager');
+--PRINT 'Usuarios internos migrados.';
+--GO 
 
 -- 3.3: Migrar los correos de notificación (parseando el texto)
 INSERT INTO dbo.AccountNotificationRecipients (AccountId, Email)
@@ -314,8 +337,18 @@ EXEC sp_rename 'dbo.AccountStatusHistory.id_campaign', 'AccountId', 'COLUMN';
 GO
 
 -- 4.2: Añadir la columna de estado y poblarla
-ALTER TABLE dbo.AccountStatusHistory ADD Status NVARCHAR(50) NOT NULL DEFAULT 'Activo';
+ALTER TABLE dbo.AccountStatusHistory ADD Status NVARCHAR(50) NOT NULL DEFAULT 'Por Iniciar';
 PRINT 'Tabla CampaingsActiveDates evolucionada a AccountStatusHistory.';
+GO
+
+UPDATE ash
+SET ash.Status = CASE 
+                    WHEN c.Deleted = 1 THEN 'Archivado' 
+                    WHEN c.active = 0 THEN 'Pausado' 
+                    ELSE 'Activo' 
+                 END
+FROM dbo.AccountStatusHistory ash
+JOIN dbo.Campaigns c ON ash.AccountId = c.Id;
 GO
 
 -- ####################################################################
@@ -342,32 +375,92 @@ PRINT '--- Todas las llaves foráneas han sido añadidas. ---';
 
 -- ####################################################################
 
-PRINT '--- PASO 6 (OPCIONAL): Limpieza Final ---';
-PRINT 'Verifica que todos los datos se hayan migrado correctamente antes de ejecutar este paso.';
-/*
--- 6.1: Re-cablear todas las tablas que dependían de 'Campaigns' para que apunten a 'Accounts'.
--- Ejemplo para la tabla 'Leads':
-ALTER TABLE dbo.Leads ADD AccountId INT NULL;
+-- ####################################################################
+-- ### 3. COMPLETAR: Re-cableado de Todas las Dependencias de `Campaigns`
+-- ### Esta es la sección completa que faltaba para actualizar todas las tablas que apuntaban a 'Campaigns'.
+-- ####################################################################
+PRINT '--- Re-cableando TODAS las tablas dependientes de Campaigns para que apunten a Accounts ---';
+
+-- Tabla: Teams
+ALTER TABLE dbo.Teams ADD AccountId INT NULL;
 GO
-UPDATE dbo.Leads SET AccountId = CampaignId;
+UPDATE t SET t.AccountId = c.Id FROM dbo.Teams t JOIN dbo.Campaigns c ON t.CampaignId = c.Id;
 GO
-ALTER TABLE dbo.Leads ADD CONSTRAINT FK_Leads_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+ALTER TABLE dbo.Teams ADD CONSTRAINT FK_Teams_Accounts_New FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
 GO
--- **DEBES REPETIR ESTE PATRÓN PARA TODAS LAS TABLAS DEPENDIENTES ANTES DE BORRAR CAMPAIGNS**
--- Tablas a revisar: CampaignIndustries, CampaignSettings, CampaignUsers, Reports, Webhooks, Teams, etc.
+-- ALTER TABLE dbo.Teams DROP COLUMN CampaignId; -- Descomentar al final
 
-
--- 6.2: Eliminar la tabla 'Campaigns' obsoleta
-PRINT '*** ¡ADVERTENCIA! El siguiente paso es irreversible. ***';
--- DROP TABLE dbo.Campaigns;
-
-*/
-
-COMMIT TRANSACTION; -- Si todo salió bien, confirmamos los cambios.
+-- Tabla: CampaignIndustries
+EXEC sp_rename 'dbo.CampaignIndustries', 'AccountIndustries';
+GO
+ALTER TABLE dbo.AccountIndustries ADD AccountId INT NULL;
+GO
+UPDATE dbo.AccountIndustries SET AccountId = CampaignId;
+GO
+PRINT 'Limpiando tabla: AccountIndustries...';
+DELETE FROM dbo.AccountIndustries
+WHERE AccountId NOT IN (SELECT AccountId FROM dbo.Accounts);
+GO
+ALTER TABLE dbo.AccountIndustries ADD CONSTRAINT FK_AccountIndustries_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
 GO
 
-PRINT '--- Proceso completado exitosamente. ---';
 
+-- ALTER TABLE dbo.AccountIndustries DROP COLUMN CampaignId;
+
+-- Tabla: CampaignSettings
+EXEC sp_rename 'dbo.CampaignSettings', 'AccountSettings';
+GO
+ALTER TABLE dbo.AccountSettings ADD AccountId INT NULL;
+GO
+UPDATE dbo.AccountSettings SET AccountId = CampId; -- Ojo, el nombre de la columna era 'CampId'
+GO
+PRINT 'Limpiando tabla: AccountSettings...';
+DELETE FROM dbo.AccountSettings
+WHERE AccountId NOT IN (SELECT AccountId FROM dbo.Accounts);
+GO
+ALTER TABLE dbo.AccountSettings ADD CONSTRAINT FK_AccountSettings_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+GO
+-- ALTER TABLE dbo.AccountSettings DROP COLUMN CampId;
+
+-- Tabla: CampaignUsers
+EXEC sp_rename 'dbo.CampaignUsers', 'AccountUsers';
+GO
+ALTER TABLE dbo.AccountUsers ADD AccountId INT NULL;
+GO
+
+UPDATE dbo.AccountUsers SET AccountId = CampaignId;
+GO
+PRINT 'Limpiando tabla: AccountUsers...';
+DELETE FROM dbo.AccountUsers
+WHERE AccountId NOT IN (SELECT AccountId FROM dbo.Accounts);
+GO
+
+ALTER TABLE dbo.AccountUsers ADD CONSTRAINT FK_AccountUsers_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+GO
+-- ALTER TABLE dbo.AccountUsers DROP COLUMN CampaignId;
+
+-- Tabla: Reports
+ALTER TABLE dbo.Reports ADD AccountId INT NULL;
+GO
+UPDATE dbo.Reports SET AccountId = CampaignId;
+GO
+DELETE FROM dbo.Reports
+WHERE AccountId NOT IN (SELECT AccountId FROM dbo.Accounts);
+GO
+ALTER TABLE dbo.Reports ADD CONSTRAINT FK_Reports_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+GO
+-- ALTER TABLE dbo.Reports DROP COLUMN CampaignId;
+
+-- Tabla: Webhooks
+ALTER TABLE dbo.Webhooks ADD AccountId INT NULL;
+GO
+UPDATE dbo.Webhooks SET AccountId = CampaignId;
+GO
+PRINT 'Limpiando tabla: Teams...';
+DELETE FROM dbo.Teams
+WHERE AccountId NOT IN (SELECT AccountId FROM dbo.Accounts);
+ALTER TABLE dbo.Webhooks ADD CONSTRAINT FK_Webhooks_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+GO
 
 PRINT '--- Módulo 2: Adaptando Funnels y Stages existentes... ---';
 
@@ -420,3 +513,112 @@ ALTER TABLE dbo.Stages
 ADD CONSTRAINT FK_Stages_Funnels FOREIGN KEY (FunnelId) REFERENCES dbo.Funnels(Id);
 GO
 
+BEGIN TRANSACTION;
+GO
+
+PRINT '--- MÓDULO 3: Creando y Migrando el Motor de Calificación... ---';
+
+-- ####################################################################
+-- ### PASO 3.1: CREAR LAS TABLAS DEL MOTOR DE CALIFICACIÓN
+-- ####################################################################
+PRINT '--- Creando las tablas del Motor de Calificación... ---';
+
+CREATE TABLE dbo.TemplateCategories( CategoryId INT PRIMARY KEY IDENTITY(1,1), Name NVARCHAR(255) NOT NULL );
+GO
+CREATE TABLE dbo.ScoringTemplates( TemplateId INT PRIMARY KEY IDENTITY(1,1), CategoryId INT NULL, Name NVARCHAR(255) NOT NULL, Description NVARCHAR(1000) NULL, CONSTRAINT FK_ScoringTemplates_Categories FOREIGN KEY (CategoryId) REFERENCES dbo.TemplateCategories(CategoryId) );
+GO
+CREATE TABLE dbo.ScoringTemplateQuestions( TemplateQuestionId INT PRIMARY KEY IDENTITY(1,1), TemplateId INT NOT NULL, QuestionText NVARCHAR(1000) NOT NULL, CONSTRAINT FK_TemplateQuestions_Templates FOREIGN KEY (TemplateId) REFERENCES dbo.ScoringTemplates(TemplateId) ON DELETE CASCADE );
+GO
+CREATE TABLE dbo.ScoringTemplateAnswerOptions( TemplateAnswerId INT PRIMARY KEY IDENTITY(1,1), TemplateQuestionId INT NOT NULL, AnswerText NVARCHAR(1000) NOT NULL, CONSTRAINT FK_TemplateAnswerOptions_TemplateQuestions FOREIGN KEY (TemplateQuestionId) REFERENCES dbo.ScoringTemplateQuestions(TemplateQuestionId) ON DELETE CASCADE );
+GO
+CREATE TABLE dbo.ScoringModels( ScoringModelId INT PRIMARY KEY IDENTITY(1,1), AccountId INT NOT NULL, Name NVARCHAR(255) NOT NULL, CONSTRAINT FK_ScoringModels_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId) ON DELETE CASCADE );
+GO
+CREATE TABLE dbo.ScoringQuestions( QuestionId INT PRIMARY KEY IDENTITY(1,1), ScoringModelId INT NOT NULL, QuestionText NVARCHAR(1000) NOT NULL, CONSTRAINT FK_ScoringQuestions_Models FOREIGN KEY (ScoringModelId) REFERENCES dbo.ScoringModels(ScoringModelId) ON DELETE CASCADE );
+GO
+CREATE TABLE dbo.ScoringAnswerOptions( AnswerOptionId INT PRIMARY KEY IDENTITY(1,1), QuestionId INT NOT NULL, AnswerText NVARCHAR(1000) NOT NULL, CONSTRAINT FK_AnswerOptions_Questions FOREIGN KEY (QuestionId) REFERENCES dbo.ScoringQuestions(QuestionId) ON DELETE CASCADE );
+GO
+CREATE TABLE dbo.ScoringRules( RuleId INT PRIMARY KEY IDENTITY(1,1), ScoringModelId INT NOT NULL, ConditionQuestionId INT NULL, ConditionAnswerOptionId INT NULL, ActionType NVARCHAR(100) NOT NULL, ActionValue NVARCHAR(255) NOT NULL, ExecutionOrder INT NOT NULL DEFAULT 0, CONSTRAINT FK_ScoringRules_Models FOREIGN KEY (ScoringModelId) REFERENCES dbo.ScoringModels(ScoringModelId), CONSTRAINT FK_ScoringRules_Questions FOREIGN KEY (ConditionQuestionId) REFERENCES dbo.ScoringQuestions(QuestionId), CONSTRAINT FK_ScoringRules_AnswerOptions FOREIGN KEY (ConditionAnswerOptionId) REFERENCES dbo.ScoringAnswerOptions(AnswerOptionId) );
+GO
+CREATE TABLE dbo.LeadTiers( TierId INT PRIMARY KEY IDENTITY(1,1), Name NVARCHAR(100) NOT NULL );
+GO
+INSERT INTO dbo.LeadTiers (Name) VALUES ('Estándar'), ('Premier');
+GO
+CREATE TABLE dbo.LeadScoringAnswers ( ScoringAnswerId INT PRIMARY KEY IDENTITY(1,1), LeadId BIGINT NOT NULL, QuestionId INT NOT NULL, AnswerOptionId INT NOT NULL );
+GO
+
+-- ####################################################################
+-- ### PASO 3.2: MIGRAR TU SISTEMA 'LEADPACKAGES' AL NUEVO MOTOR
+-- ####################################################################
+PRINT '--- Migrando el sistema de calificación existente... ---';
+
+-- 1. Migrar catálogos existentes a las nuevas plantillas
+INSERT INTO dbo.ScoringTemplates (Name, Description) SELECT DescriptionES, DescriptionES FROM dbo.LeadPackages;
+GO
+INSERT INTO dbo.ScoringTemplateQuestions (TemplateId, QuestionText) SELECT st.TemplateId, lq.DescriptionES FROM dbo.LeadQuestions lq JOIN dbo.LeadPackages lp ON lq.LeadPackageId = lp.Id JOIN dbo.ScoringTemplates st ON lp.DescriptionES = st.Name;
+GO
+INSERT INTO dbo.ScoringTemplateAnswerOptions (TemplateQuestionId, AnswerText) SELECT stq.TemplateQuestionId, la.DescriptionES FROM dbo.LeadAnswers la JOIN dbo.LeadQuestions lq ON la.LeadQuestionId = lq.Id JOIN dbo.ScoringTemplateQuestions stq ON lq.DescriptionES = stq.QuestionText;
+GO
+
+-- 2. Crear los ScoringModels "vivos" para cada Account que tenía un LeadPackage asignado
+INSERT INTO dbo.ScoringModels (AccountId, Name) SELECT a.AccountId, CONCAT('Calificador para ', a.Name) FROM dbo.Accounts a JOIN dbo.Campaigns c ON a.AccountId = c.Id WHERE c.LeadPackageId IS NOT NULL;
+GO
+
+-- 3. Copiar las preguntas y respuestas de la plantilla al modelo vivo
+INSERT INTO dbo.ScoringQuestions (ScoringModelId, QuestionText) SELECT sm.ScoringModelId, stq.QuestionText FROM dbo.Accounts a JOIN dbo.Campaigns c ON a.AccountId = c.Id JOIN dbo.LeadPackages lp ON c.LeadPackageId = lp.Id JOIN dbo.ScoringTemplates st ON lp.DescriptionES = st.Name JOIN dbo.ScoringTemplateQuestions stq ON st.TemplateId = stq.TemplateId JOIN dbo.ScoringModels sm ON a.AccountId = sm.AccountId;
+GO
+INSERT INTO dbo.ScoringAnswerOptions (QuestionId, AnswerText) SELECT sq.QuestionId, stao.AnswerText FROM dbo.Accounts a JOIN dbo.Campaigns c ON a.AccountId = c.Id JOIN dbo.LeadPackages lp ON c.LeadPackageId = lp.Id JOIN dbo.ScoringTemplates st ON lp.DescriptionES = st.Name JOIN dbo.ScoringTemplateQuestions stq ON st.TemplateId = stq.TemplateId JOIN dbo.ScoringTemplateAnswerOptions stao ON stq.TemplateQuestionId = stao.TemplateQuestionId JOIN dbo.ScoringModels sm ON a.AccountId = sm.AccountId JOIN dbo.ScoringQuestions sq ON sm.ScoringModelId = sq.ScoringModelId AND stq.QuestionText = sq.QuestionText;
+GO
+
+-- 4. Traducir la vieja lógica de puntuación a Reglas 'ADD_POINTS'
+INSERT INTO dbo.ScoringRules (ScoringModelId, ConditionQuestionId, ConditionAnswerOptionId, ActionType, ActionValue)
+SELECT sq.ScoringModelId, sq.QuestionId, sao.AnswerOptionId, 'ADD_POINTS', la.Value FROM dbo.LeadAnswers la JOIN dbo.LeadQuestions lq ON la.LeadQuestionId = lq.Id JOIN dbo.ScoringQuestions sq ON lq.DescriptionES = sq.QuestionText JOIN dbo.ScoringAnswerOptions sao ON sq.QuestionId = sao.QuestionId AND la.DescriptionES = sao.AnswerText WHERE ISNUMERIC(la.Value) = 1;
+GO
+
+-- ####################################################################
+-- ### PASO 3.3: MIGRAR LAS RESPUESTAS HISTÓRICAS DE LOS LEADS (PATRÓN)
+-- ####################################################################
+PRINT '--- Migrando las respuestas históricas de los Leads... ---';
+-- **ACCIÓN REQUERIDA:** Este es un patrón que deberás repetir para cada campo de calificación de tu tabla `Leads` (Budget, BuyingTime, etc.)
+
+-- Ejemplo para la pregunta "Budget"
+INSERT INTO dbo.LeadScoringAnswers (LeadId, QuestionId, AnswerOptionId)
+SELECT l.Id, sq.QuestionId, sao.AnswerOptionId
+FROM dbo.Leads l
+JOIN dbo.LeadAnswers la ON l.Budget = la.Value
+JOIN dbo.LeadQuestions lq ON la.LeadQuestionId = lq.Id AND lq.LeadField = 'Budget'
+JOIN dbo.ScoringQuestions sq ON lq.DescriptionES = sq.QuestionText
+JOIN dbo.ScoringAnswerOptions sao ON sq.QuestionId = sao.QuestionId AND la.DescriptionES = sao.AnswerText
+WHERE l.Budget IS NOT NULL;
+GO
+-- Repite el bloque INSERT anterior para tus otros campos de calificación (`BuyingTime`, etc.)
+
+
+-- ####################################################################
+-- ### PASO 3.4: LIMPIEZA DE TODAS LAS TABLAS DE CALIFICACIÓN OBSOLETAS
+-- ####################################################################
+PRINT '--- Limpieza de tablas de calificación obsoletas... ---';
+PRINT '--- Revisa que la migración sea correcta antes de descomentar y ejecutar este bloque. ---';
+/*
+-- Reemplazada por ScoringTemplates
+DROP TABLE dbo.LeadPackages;
+
+-- Reemplazada por ScoringTemplateQuestions y ScoringQuestions
+DROP TABLE dbo.LeadQuestions;
+
+-- Reemplazada por ScoringTemplateAnswerOptions y ScoringAnswerOptions
+DROP TABLE dbo.LeadAnswers;
+
+-- Reemplazadas por el nuevo Motor de Reglas
+DROP TABLE dbo.ScoreQuestions;
+DROP TABLE dbo.ScoreIndicators;
+DROP TABLE dbo.SelectLeads;
+DROP TABLE dbo.SelectsLeads;
+
+*/
+GO
+
+
+COMMIT TRANSACTION;
+GO
+
+PRINT '--- Módulo de Calificación completado. ---';
