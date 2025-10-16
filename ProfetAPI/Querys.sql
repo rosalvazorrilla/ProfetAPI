@@ -57,6 +57,18 @@ ALTER TABLE dbo.Users DROP CONSTRAINT [DF__Users__IsAdmin__39AD8A7F];
 ALTER TABLE dbo.Users DROP CONSTRAINT [DF__Users__profilePi__3C89F72A];
 ALTER TABLE dbo.Users DROP CONSTRAINT [DF__Users__AlertAssi__6462DE5A];
 
+PRINT '--- Generando comandos para borrar CONSTRAINTS de Users. Copia y ejecuta la salida. ---';
+DECLARE @sql NVARCHAR(MAX) = N'';
+SELECT @sql += 'ALTER TABLE dbo.Users DROP CONSTRAINT ' + QUOTENAME(dc.name) + ';' + CHAR(13)
+FROM sys.default_constraints dc
+JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+WHERE dc.parent_object_id = OBJECT_ID('dbo.Users') AND c.name IN (
+    'FirstName', 'LastName', 'Position', 'Address', 'Date', 'CompanyName', 'Phone', 'Web', 'Contact', 'PhoneExt', 
+    'Mobile', 'IndustrySector', 'TwilioNumber', 'cp_extension_name', 'cp_extension', 'cp_key', 'ProfilePicture', 
+    'Pass64', 'alertAssignment', 'isAdmin'
+);
+PRINT @sql;
+GO
 ALTER TABLE dbo.Users
 DROP COLUMN FirstName, LastName, Position, Address, Date, CompanyName, Phone, Web, Contact, PhoneExt, Mobile, IndustrySector, TwilioNumber, cp_extension_name, cp_extension, cp_key, ProfilePicture, Pass64, alertAssignment, isAdmin;
 GO
@@ -457,8 +469,8 @@ GO
 UPDATE dbo.Webhooks SET AccountId = CampaignId;
 GO
 PRINT 'Limpiando tabla: Teams...';
-DELETE FROM dbo.Teams
-WHERE AccountId NOT IN (SELECT AccountId FROM dbo.Accounts);
+DELETE FROM dbo.Webhooks
+WHERE AccountId NOT IN (SELECT AccountId FROM dbo.Accounts) AND AccountId IS NOT NULL;
 ALTER TABLE dbo.Webhooks ADD CONSTRAINT FK_Webhooks_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
 GO
 
@@ -622,3 +634,605 @@ COMMIT TRANSACTION;
 GO
 
 PRINT '--- Módulo de Calificación completado. ---';
+
+
+-- ####################################################################
+-- ### INICIO DE LA TRANSACCIÓN GLOBAL
+-- ####################################################################
+BEGIN TRANSACTION;
+GO
+
+-- ####################################################################
+-- ### FASE 1: CREAR LAS NUEVAS TABLAS
+-- ### Creamos el esqueleto de todo el nuevo núcleo del CRM.
+-- ####################################################################
+PRINT '--- FASE 1: Creando las nuevas tablas del núcleo del CRM... ---';
+
+-- 1.1: El Directorio Central
+CREATE TABLE dbo.Companies (
+    CompanyId INT PRIMARY KEY IDENTITY(1,1), Name NVARCHAR(255) NOT NULL, Website NVARCHAR(500) NULL, PhoneNumber NVARCHAR(100) NULL,
+    Address NVARCHAR(1000) NULL, City NVARCHAR(255) NULL, State NVARCHAR(255) NULL, PostalCode NVARCHAR(50) NULL,
+    LifecycleStatus NVARCHAR(50) NOT NULL DEFAULT 'Prospecto',
+    CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE(), ModifiedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+GO
+CREATE TABLE dbo.Contacts (
+    ContactId INT PRIMARY KEY IDENTITY(1,1), CompanyId INT NULL, FirstName NVARCHAR(255) NULL, LastName NVARCHAR(255) NULL,
+    Email NVARCHAR(255) NULL, PhoneNumber NVARCHAR(100) NULL, Position NVARCHAR(255) NULL, OriginatingLeadId BIGINT NULL,
+    CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE(), ModifiedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    CONSTRAINT UQ_Contacts_Email UNIQUE (Email)
+);
+GO
+
+-- 1.2: El Flujo de Trabajo
+CREATE TABLE dbo.Leads_New (
+    LeadId BIGINT PRIMARY KEY IDENTITY(1,1), AccountId INT NOT NULL, OwnerUserId NVARCHAR(128) NOT NULL, ContactId INT NOT NULL,
+    ProspectSource NVARCHAR(MAX) NULL, AdName VARCHAR(200) NULL, ContactFormId INT NULL,
+    InitialMessage NVARCHAR(MAX) NULL, OriginType NVARCHAR(50) NOT NULL DEFAULT 'Inbound',
+    Status NVARCHAR(50) NOT NULL DEFAULT 'Nuevo',
+    CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+GO
+CREATE TABLE dbo.Deals (
+    DealId INT PRIMARY KEY IDENTITY(1,1), PublicId VARCHAR(20) NULL, ExternalId VARCHAR(100) NULL,
+    DealName NVARCHAR(500) NOT NULL, QuotedAmount DECIMAL(18, 2) NULL, FinalAmount DECIMAL(18, 2) NULL,
+    AccountId INT NOT NULL, CompanyId INT NULL, PrimaryContactId INT NULL, StageId INT NULL, LeadLostReasonId INT NULL, LeadTierId INT NULL,
+    Status NVARCHAR(50) NOT NULL DEFAULT 'Abierto',
+    CloseDate DATETIME2 NULL, DealType NVARCHAR(50) NOT NULL DEFAULT 'NewBusiness',
+    OriginatingLeadId BIGINT NULL, CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    ProspectSource NVARCHAR(MAX) NULL, AdName VARCHAR(200) NULL, OriginType NVARCHAR(50) NULL
+);
+GO
+CREATE TABLE dbo.DealUsers ( DealId INT NOT NULL, UserId NVARCHAR(128) NOT NULL, RoleInDeal NVARCHAR(50) NOT NULL, CONSTRAINT PK_DealUsers PRIMARY KEY (DealId, UserId));
+GO
+
+-- 1.3: El Historial Unificado (Tablas Polimórficas)
+CREATE TABLE dbo.Notes (NoteId INT PRIMARY KEY IDENTITY(1,1), Content NVARCHAR(MAX) NULL, AuthorUserId NVARCHAR(128) NULL, CreatedOn DATETIME2, EntityId BIGINT, EntityType VARCHAR(50));
+GO
+CREATE TABLE dbo.Attachments (AttachmentId INT PRIMARY KEY IDENTITY(1,1), FileName NVARCHAR(255), FilePath NVARCHAR(1000), UploaderUserId NVARCHAR(128), CreatedOn DATETIME2, EntityId BIGINT, EntityType VARCHAR(50));
+GO
+CREATE TABLE dbo.Activities_New ( ActivityId INT PRIMARY KEY IDENTITY(1,1), ActivityType NVARCHAR(50) NULL, Subject NVARCHAR(500) NULL, "Date" DATETIME2, Notes NVARCHAR(MAX) NULL, IsCompleted BIT, OwnerUserId NVARCHAR(128), EntityId BIGINT, EntityType VARCHAR(50));
+GO
+CREATE TABLE dbo.CallDetails ( CallDetailId INT PRIMARY KEY IDENTITY(1,1), ActivityId INT NOT NULL, RecordingUrl VARCHAR(500) NULL, Duration VARCHAR(255) NULL, CallSid VARCHAR(100) NULL);
+GO
+
+-- 1.4: Tablas de Soporte Adaptadas
+CREATE TABLE dbo.DealPayments ( PaymentId INT PRIMARY KEY IDENTITY(1,1), DealId INT NOT NULL, Amount DECIMAL(18,2), PaymentDate DATETIME2, Description NVARCHAR(500) );
+GO
+CREATE TABLE dbo.ContactReferrals ( ReferralId INT PRIMARY KEY IDENTITY(1,1), ReferrerContactId INT NOT NULL, ReferredContactId INT NOT NULL, Description NVARCHAR(500), ReferralDate DATETIME2 );
+GO
+
+-- ####################################################################
+-- ### FASE 2: LA GRAN MIGRACIÓN DE DATOS
+-- ####################################################################
+PRINT '--- FASE 2: Iniciando la Gran Migración desde Leads y tablas relacionadas... ---';
+
+-- 2.1: Poblar el directorio central
+INSERT INTO dbo.Companies (Name, PhoneNumber, Address)
+SELECT DISTINCT Company, Phone, StreetAndNumber FROM dbo.Leads WHERE Company IS NOT NULL AND Company <> '';
+GO
+INSERT INTO dbo.Contacts (CompanyId, FirstName, Email, PhoneNumber, Position, OriginatingLeadId)
+SELECT comp.CompanyId, le.Name, le.Email, le.Phone, le.Position, le.Id
+FROM dbo.Leads le LEFT JOIN dbo.Companies comp ON le.Company = comp.Name;
+GO
+
+-- 2.2: Poblar la nueva tabla de Leads (simplificada)
+INSERT INTO dbo.Leads_New (AccountId, OwnerUserId, ContactId, ProspectSource, AdName, InitialMessage, OriginType, Status, CreatedOn)
+SELECT 
+    le.AccountId, ISNULL(le.UserId, '00000000-0000-0000-0000-000000000000'), ct.ContactId, le.ProspectSource, le.AdName, le.MessageSent, 
+    CASE WHEN le.Outbound = 1 THEN 'Outbound' ELSE 'Inbound' END,
+    'Convertido', -- Asumimos que todos los leads viejos ya fueron procesados
+    le.LeadDate
+FROM dbo.Leads le
+JOIN dbo.Contacts ct ON le.Id = ct.OriginatingLeadId
+WHERE le.AccountId IS NOT NULL AND le.UserId IS NOT NULL;
+GO
+
+-- 2.3: Poblar la tabla de Deals
+INSERT INTO dbo.Deals (DealName, QuotedAmount, FinalAmount, AccountId, CompanyId, PrimaryContactId, StageId, LeadLostReasonId, Status, CloseDate, ExternalId, OriginatingLeadId, CreatedOn, ProspectSource, AdName, OriginType)
+SELECT
+    ISNULL(le.Name, 'Trato sin nombre'), le.QuotedAmount, le.SellApproxAmount, le.AccountId, comp.CompanyId, ct.ContactId, le.StageId, le.LeadLostReasonsId,
+    CASE WHEN le.statelead = 1 THEN 'Ganado' WHEN le.statelead = 0 THEN 'Perdido' ELSE 'Abierto' END,
+    le.StateLeadDate, le.DealId, le.Id, le.LeadDate, le.ProspectSource, le.AdName, CASE WHEN le.Outbound = 1 THEN 'Outbound' ELSE 'Inbound' END
+FROM dbo.Leads le
+JOIN dbo.Contacts ct ON le.Id = ct.OriginatingLeadId
+LEFT JOIN dbo.Companies comp ON ct.CompanyId = comp.CompanyId
+WHERE le.AccountId IS NOT NULL;
+GO
+INSERT INTO dbo.DealUsers (DealId, UserId, RoleInDeal)
+SELECT d.DealId, l.UserId, 'Owner'
+FROM dbo.Deals d JOIN dbo.Leads l ON d.OriginatingLeadId = l.Id WHERE l.UserId IS NOT NULL;
+GO
+
+-- 2.4: Migrar las tablas relacionadas al sistema polimórfico
+INSERT INTO dbo.Notes (Content, AuthorUserId, CreatedOn, EntityId, EntityType) SELECT Note, UserId, Date, LeadId, 'Lead' FROM dbo.LeadNotes;
+GO
+INSERT INTO dbo.Notes (Content, EntityId, EntityType) SELECT Comments, Id, 'Lead' FROM dbo.Leads WHERE Comments IS NOT NULL;
+GO
+INSERT INTO dbo.Attachments (FileName, UploaderUserId, CreatedOn, EntityId, EntityType) SELECT Name, UserId, Date, LeadId, 'Lead' FROM dbo.LeadFiles;
+GO
+INSERT INTO dbo.Activities_New (ActivityType, Subject, "Date", Notes, IsCompleted, OwnerUserId, EntityId, EntityType) SELECT ta.Title, a.Title, a.Date, a.Notes, a.Completed, a.UserId, a.LeadId, 'Lead' FROM dbo.Activities a JOIN dbo.TypeActivitiys ta ON a.TypeActivityId = ta.Id;
+GO
+-- Migración de LeadCalls a Activities y CallDetails
+DECLARE @CallMap TABLE (OldLeadCallId INT, NewActivityId INT);
+INSERT INTO dbo.Activities_New (ActivityType, Subject, "Date", OwnerUserId, EntityId, EntityType, IsCompleted)
+OUTPUT INSERTED.ActivityId, T.id INTO @CallMap(NewActivityId, OldLeadCallId)
+SELECT 'Call', lc.RecordName, lc.date, lc.UserId, lc.lead_id, 'Lead', CASE WHEN lc.status = 'completed' THEN 1 ELSE 0 END
+FROM dbo.LeadCalls lc;
+INSERT INTO dbo.CallDetails (ActivityId, RecordingUrl, Duration, CallSid)
+SELECT cm.NewActivityId, CONCAT(lc.record_keys, '/', lc.RecordName), lc.duration, lc.call_id
+FROM dbo.LeadCalls lc JOIN @CallMap cm ON lc.id = cm.OldLeadCallId;
+GO
+
+-- 2.5: Migrar tablas de soporte a su nuevo hogar
+INSERT INTO dbo.DealPayments (DealId, Amount, PaymentDate, Description) SELECT d.DealId, lp.Amount, lp.Date, lp.Description FROM dbo.LeadPayments lp JOIN dbo.Deals d ON lp.DealId = d.DealId;
+GO
+INSERT INTO dbo.ContactReferrals (ReferrerContactId, ReferredContactId, Description, ReferralDate) SELECT c1.ContactId, c2.ContactId, lr.Description, lr.Date FROM dbo.LeadRefers lr JOIN dbo.Contacts c1 ON lr.LeadId = c1.OriginatingLeadId JOIN dbo.Contacts c2 ON lr.ReferId = c2.OriginatingLeadId;
+GO
+
+-- 2.6: Migración de Campos Personalizados ("Variables")
+-- **ACCIÓN REQUERIDA:** Repite este patrón para cada columna de "variable" que quieras migrar.
+PRINT '--- Migrando Campos Personalizados (Variables)... ---';
+INSERT INTO dbo.CustomFieldValues (FieldId, EntityId, EntityType, Value)
+SELECT 
+    (SELECT FieldId FROM CustomFieldDefinitions WHERE FieldCode = 'Size'),
+    d.DealId, 'Deal', l.Size
+FROM dbo.Leads l JOIN dbo.Deals d ON l.Id = d.OriginatingLeadId WHERE l.Size IS NOT NULL;
+GO
+
+-- ####################################################################
+-- ### FASE 3: AÑADIR LLAVES FORÁNEAS Y LIMPIEZA FINAL
+-- ####################################################################
+PRINT '--- FASE 3: Añadiendo llaves foráneas y limpiando... ---';
+
+-- 3.1: Añadir todas las llaves foráneas
+ALTER TABLE dbo.Deals ADD CONSTRAINT FK_Deals_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId);
+GO
+ALTER TABLE dbo.Deals ADD CONSTRAINT FK_Deals_Companies FOREIGN KEY (CompanyId) REFERENCES dbo.Companies(CompanyId);
+GO
+ALTER TABLE dbo.Deals ADD CONSTRAINT FK_Deals_Contacts FOREIGN KEY (PrimaryContactId) REFERENCES dbo.Contacts(ContactId);
+GO
+ALTER TABLE dbo.DealUsers ADD CONSTRAINT FK_DealUsers_Deals FOREIGN KEY (DealId) REFERENCES dbo.Deals(DealId);
+GO
+ALTER TABLE dbo.DealUsers ADD CONSTRAINT FK_DealUsers_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(Id);
+GO
+ALTER TABLE dbo.CallDetails ADD CONSTRAINT FK_CallDetails_Activities FOREIGN KEY (ActivityId) REFERENCES dbo.Activities_New(ActivityId) ON DELETE CASCADE;
+GO
+-- ... y el resto de las llaves foráneas para las nuevas tablas.
+
+-- 3.2: Renombrar y Limpiar
+EXEC sp_rename 'dbo.Leads', 'Leads_Old_Archived';
+EXEC sp_rename 'dbo.Leads_New', 'Leads';
+EXEC sp_rename 'dbo.Activities', 'Activities_Old_Archived';
+EXEC sp_rename 'dbo.Activities_New', 'Activities';
+GO
+PRINT '--- Revisa que la migración sea correcta antes de descomentar y ejecutar el bloque de limpieza final. ---';
+/*
+DROP TABLE dbo.LeadNotes;
+DROP TABLE dbo.LeadFiles;
+DROP TABLE dbo.LeadLogs;
+DROP TABLE dbo.StageLeadLogs;
+DROP TABLE dbo.LeadCalls;
+DROP TABLE dbo.Calls;
+DROP TABLE dbo.DirectCalls;
+DROP TABLE dbo.InboundCalls;
+DROP TABLE dbo.LeadRefers;
+DROP TABLE dbo.LeadPayments;
+DROP TABLE dbo.LeadCommissions;
+DROP TABLE dbo.LeadsTags;
+DROP TABLE dbo.TagsLeads;
+DROP TABLE dbo.LeadDeals;
+DROP TABLE dbo.DealsTypesDeals;
+DROP TABLE dbo.LeadDealsTypes;
+DROP TABLE dbo.LeadDealsTypesPackages;
+DROP TABLE dbo.OutputLeads;
+DROP TABLE dbo.Leads_Old_Archived;
+DROP TABLE dbo.Activities_Old_Archived;
+*/
+
+COMMIT TRANSACTION;
+GO
+
+PRINT '--- ¡MIGRACIÓN DEL NÚCLEO DEL CRM COMPLETADA! ---';
+
+PRINT '--- Creando tablas de metadatos para reportes... ---';
+
+-- Tabla para definir los tipos de gráficos disponibles (barras, pastel, etc.)
+CREATE TABLE dbo.ChartTypes (
+    ChartTypeId INT PRIMARY KEY IDENTITY(1,1),
+    Name NVARCHAR(100) NOT NULL, -- Ej: "Gráfica de Barras"
+    Code NVARCHAR(50) NOT NULL UNIQUE -- Ej: "bar", "pie", "line"
+);
+GO
+
+-- Tabla diccionario de todos los campos que se pueden usar en un reporte
+CREATE TABLE dbo.ReportableFields (
+    FieldId INT PRIMARY KEY IDENTITY(1,1),
+    DisplayName NVARCHAR(255) NOT NULL, -- El nombre que ve el usuario, ej: "Monto del Trato"
+    TechnicalName NVARCHAR(255) NOT NULL, -- El nombre técnico que usa la API, ej: "Deals.FinalAmount"
+    FieldType NVARCHAR(50) NOT NULL, -- 'Metrica' o 'Dimension'
+    AggregationType NVARCHAR(50) NULL -- Solo para Métricas, ej: 'SUM', 'COUNT', 'AVG'
+);
+GO
+
+PRINT '--- Creando tablas para Dashboards y Widgets... ---';
+
+-- Tabla para los Dashboards o "Pizarrones" de cada usuario
+CREATE TABLE dbo.Dashboards (
+    DashboardId INT PRIMARY KEY IDENTITY(1,1),
+    Name NVARCHAR(255) NOT NULL,
+    OwnerUserId NVARCHAR(128) NOT NULL,
+    CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    ModifiedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    CONSTRAINT FK_Dashboards_Users FOREIGN KEY (OwnerUserId) REFERENCES dbo.Users(Id)
+);
+GO
+
+-- Tabla para cada reporte individual (un "Widget" o gráfica) dentro de un dashboard
+CREATE TABLE dbo.Widgets (
+    WidgetId INT PRIMARY KEY IDENTITY(1,1),
+    DashboardId INT NOT NULL,
+    Name NVARCHAR(255) NOT NULL, -- Ej: "Ventas por Vendedor este Mes"
+    
+    -- La "receta" del reporte
+    MetricFieldId INT NOT NULL,
+    DimensionFieldId INT NOT NULL,
+    ChartTypeId INT NOT NULL,
+    
+    Filters NVARCHAR(MAX) NULL, -- Para guardar filtros avanzados en formato JSON
+
+    -- Posición y tamaño en el dashboard
+    PositionX INT NOT NULL DEFAULT 0,
+    PositionY INT NOT NULL DEFAULT 0,
+    Width INT NOT NULL DEFAULT 6,
+    Height INT NOT NULL DEFAULT 4,
+
+    CONSTRAINT FK_Widgets_Dashboards FOREIGN KEY (DashboardId) REFERENCES dbo.Dashboards(DashboardId) ON DELETE CASCADE,
+    CONSTRAINT FK_Widgets_MetricField FOREIGN KEY (MetricFieldId) REFERENCES dbo.ReportableFields(FieldId),
+    CONSTRAINT FK_Widgets_DimensionField FOREIGN KEY (DimensionFieldId) REFERENCES dbo.ReportableFields(FieldId),
+    CONSTRAINT FK_Widgets_ChartTypes FOREIGN KEY (ChartTypeId) REFERENCES dbo.ChartTypes(ChartTypeId)
+);
+GO
+
+PRINT '--- Creando tablas para la funcionalidad de compartir reportes... ---';
+
+-- Tabla para generar los enlaces únicos que se van a compartir
+CREATE TABLE dbo.ReportShareLinks (
+    ShareLinkId INT PRIMARY KEY IDENTITY(1,1),
+    PublicId UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID(), -- Un ID único y seguro para la URL pública
+    Description NVARCHAR(500) NULL, -- Para que el usuario sepa para qué es este enlace
+    OwnerUserId NVARCHAR(128) NOT NULL,
+    CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    ExpiresOn DATETIME2 NULL, -- Para que los enlaces puedan expirar
+    IsActive BIT NOT NULL DEFAULT 1,
+    CONSTRAINT FK_ReportShareLinks_Users FOREIGN KEY (OwnerUserId) REFERENCES dbo.Users(Id)
+);
+GO
+
+-- Tabla de unión que define qué Widgets se incluyen en cada enlace compartido
+CREATE TABLE dbo.SharedWidgets (
+    ShareLinkId INT NOT NULL,
+    WidgetId INT NOT NULL,
+    
+    CONSTRAINT PK_SharedWidgets PRIMARY KEY (ShareLinkId, WidgetId),
+    CONSTRAINT FK_SharedWidgets_Links FOREIGN KEY (ShareLinkId) REFERENCES dbo.ReportShareLinks(ShareLinkId) ON DELETE CASCADE,
+    CONSTRAINT FK_SharedWidgets_Widgets FOREIGN KEY (WidgetId) REFERENCES dbo.Widgets(WidgetId) ON DELETE CASCADE
+);
+GO
+
+-- ####################################################################
+-- ### MÓDULO: CATÁLOGO DE PRODUCTOS/SERVICIOS (ÍTEMS)
+-- ####################################################################
+PRINT '--- Creando el nuevo sistema de Catálogo de Ítems... ---';
+
+-- 1. Crear las nuevas tablas
+
+-- La tabla para los "agrupadores" o catálogos, ligada a una Account
+CREATE TABLE dbo.ItemCatalogs (
+    CatalogId INT PRIMARY KEY IDENTITY(1,1),
+    AccountId INT NOT NULL,
+    Name NVARCHAR(255) NOT NULL,
+    CONSTRAINT FK_ItemCatalogs_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId)
+);
+GO
+
+-- La tabla para los productos/servicios individuales dentro de un catálogo
+CREATE TABLE dbo.CatalogItems (
+    ItemId INT PRIMARY KEY IDENTITY(1,1),
+    CatalogId INT NOT NULL,
+    Name NVARCHAR(255) NOT NULL,
+    Price DECIMAL(18, 2) NULL,
+    Code NVARCHAR(100) NULL, -- Código de producto/SKU
+    CONSTRAINT FK_CatalogItems_Catalogs FOREIGN KEY (CatalogId) REFERENCES dbo.ItemCatalogs(CatalogId) ON DELETE CASCADE
+);
+GO
+
+-- La tabla de unión que conecta un Deal con los ítems que se están vendiendo
+CREATE TABLE dbo.DealItems (
+    DealId INT NOT NULL,
+    ItemId INT NOT NULL,
+    Quantity INT NOT NULL DEFAULT 1,
+    Price DECIMAL(18, 2) NOT NULL, -- El precio final acordado para este ítem en este trato
+    CONSTRAINT PK_DealItems PRIMARY KEY (DealId, ItemId),
+    CONSTRAINT FK_DealItems_Deals FOREIGN KEY (DealId) REFERENCES dbo.Deals(DealId) ON DELETE CASCADE,
+    CONSTRAINT FK_DealItems_Items FOREIGN KEY (ItemId) REFERENCES dbo.CatalogItems(ItemId)
+);
+GO
+
+-- ####################################################################
+-- ### MIGRACIÓN DE DATOS (de tus viejas tablas a las nuevas)
+-- ####################################################################
+PRINT '--- Migrando datos del viejo catálogo de productos... ---';
+
+-- 1. Migrar los "paquetes" a ItemCatalogs
+INSERT INTO dbo.ItemCatalogs (AccountId, Name)
+SELECT a.AccountId, ldtp.Description
+FROM dbo.LeadDealsTypesPackages ldtp
+JOIN dbo.Accounts a ON ldtp.Id = a.LeadDealsTypesPackagesId; -- Asumiendo que esta FK existe en la nueva tabla Accounts
+GO
+
+-- 2. Migrar los "tipos" a CatalogItems
+INSERT INTO dbo.CatalogItems (CatalogId, Name, Price, Code)
+SELECT ic.CatalogId, ldt.Description, ldt.Price, ldt.Code
+FROM dbo.LeadDealsTypes ldt
+JOIN dbo.LeadDealsTypesPackages ldtp ON ldt.LeadDealsTypePackageId = ldtp.Id
+JOIN dbo.ItemCatalogs ic ON ldtp.Description = ic.Name;
+GO
+
+-- ####################################################################
+-- ### LIMPIEZA DE TABLAS OBSOLETAS
+-- ### Añade este bloque a tu sección de limpieza final.
+-- ####################################################################
+PRINT '--- Marcando para limpieza las tablas de catálogo obsoletas... ---';
+/*
+DROP TABLE dbo.DealsTypesDeals;
+DROP TABLE dbo.LeadDealsTypes;
+DROP TABLE dbo.LeadDealsTypesPackages;
+*/
+
+-- ####################################################################
+-- ### MÓDULO: SISTEMA DE ETIQUETADO (TAGS)
+-- ####################################################################
+PRINT '--- Creando y migrando el nuevo sistema de etiquetado... ---';
+
+-- 1. Evolucionar tu catálogo de etiquetas 'TagsLeads' a una tabla genérica 'Tags'
+PRINT '--- Evolucionando la tabla de catálogo TagsLeads a Tags... ---';
+EXEC sp_rename 'dbo.TagsLeads', 'Tags';
+GO
+EXEC sp_rename 'dbo.Tags.Id', 'TagId', 'COLUMN';
+GO
+
+-- 2. Crear la nueva tabla de unión polimórfica 'Taggings'
+-- Esta tabla reemplazará a 'LeadsTags' y permitirá etiquetar cualquier entidad.
+PRINT '--- Creando la nueva tabla polimórfica Taggings... ---';
+CREATE TABLE dbo.Taggings (
+    TagId INT NOT NULL,
+    EntityId BIGINT NOT NULL, -- Puede ser un LeadId, DealId, ContactId, etc.
+    EntityType NVARCHAR(50) NOT NULL, -- 'Lead', 'Deal', 'Contact'
+
+    CONSTRAINT PK_Taggings PRIMARY KEY (TagId, EntityId, EntityType),
+    CONSTRAINT FK_Taggings_Tags FOREIGN KEY (TagId) REFERENCES dbo.Tags(TagId) ON DELETE CASCADE
+);
+GO
+
+-- 3. Migrar los datos existentes de 'LeadsTags' a la nueva tabla 'Taggings'
+PRINT '--- Migrando las etiquetas existentes de los leads... ---';
+INSERT INTO dbo.Taggings (TagId, EntityId, EntityType)
+SELECT 
+    lt.TagsLeadId,
+    lt.LeadId,
+    'Lead' -- Todos los registros existentes son de tipo 'Lead'
+FROM dbo.LeadsTags lt;
+GO
+
+-- 4. Limpieza de la tabla obsoleta
+-- Añade este bloque a tu sección de limpieza final.
+PRINT '--- Marcando para limpieza la tabla obsoleta LeadsTags... ---';
+/*
+DROP TABLE dbo.LeadsTags;
+*/
+
+BEGIN TRANSACTION;
+GO
+
+-- ####################################################################
+-- ### MÓDULO 1: INTEGRACIÓN CON WHATSAPP
+-- ####################################################################
+PRINT '--- Módulo 1: Integrando WhatsApp... ---';
+
+-- 1.1: Añadir la bandera a la tabla Contacts para identificar contactos de WhatsApp
+ALTER TABLE dbo.Contacts
+ADD IsWhatsappContact BIT NOT NULL DEFAULT 0;
+GO
+
+-- 1.2: Migrar la información, marcando los contactos existentes que son de WhatsApp
+-- (Este script asume que se pueden cruzar por el número de teléfono)
+UPDATE c
+SET c.IsWhatsappContact = 1
+FROM dbo.Contacts c
+JOIN dbo.ContactsWhatsapp cwa ON c.PhoneNumber = cwa.PhoneNumber; -- Ajusta el JOIN si la relación es otra
+GO
+
+-- 1.3: Formalizar la relación de la tabla de mensajes con el directorio de contactos
+ALTER TABLE dbo.MessagesWhatsapp
+ADD CONSTRAINT FK_MessagesWhatsapp_Contacts FOREIGN KEY (ContactId) REFERENCES dbo.Contacts(ContactId);
+GO
+
+-- ####################################################################
+-- ### MÓDULO 2: SISTEMA DE NOTIFICACIONES
+-- ####################################################################
+PRINT '--- Módulo 2: Evolucionando Notificaciones... ---';
+
+-- 2.1: Hacer la tabla 'Notifications' polimórfica
+ALTER TABLE dbo.Notifications
+ADD EntityId BIGINT NULL,
+    EntityType NVARCHAR(50) NULL;
+GO
+
+-- 2.2: Asegurar las llaves y relaciones
+ALTER TABLE dbo.NotificationTypes
+ADD CONSTRAINT PK_NotificationTypes PRIMARY KEY (Id);
+GO
+ALTER TABLE dbo.Notifications
+ADD CONSTRAINT FK_Notifications_Types FOREIGN KEY (NotificationType) REFERENCES dbo.NotificationTypes(Id);
+GO
+
+-- ####################################################################
+-- ### MÓDULO 3: HISTORIAL Y LOGS (AUDITORÍA)
+-- ####################################################################
+PRINT '--- Módulo 3: Unificando Historial de Auditoría... ---';
+
+-- 3.1: Crear la nueva tabla polimórfica para auditoría de acciones de usuario
+CREATE TABLE dbo.AuditLogs (
+    LogId INT PRIMARY KEY IDENTITY(1,1),
+    EntityId BIGINT NOT NULL,
+    EntityType NVARCHAR(50) NOT NULL,
+    AuthorUserId NVARCHAR(128) NULL,
+    Timestamp DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    EventType NVARCHAR(100) NOT NULL, -- 'FieldUpdate', 'StageChange', 'NoteAdded'
+    Description NVARCHAR(MAX) NOT NULL,
+    ChangeData NVARCHAR(MAX) NULL -- JSON con OldValue y NewValue
+);
+GO
+
+-- 3.2: Migrar los datos de 'LeadLogs' y 'StageLeadLogs' a la nueva tabla
+-- Migración de LeadLogs
+INSERT INTO dbo.AuditLogs (EntityId, EntityType, AuthorUserId, Timestamp, EventType, Description)
+SELECT LeadId, 'Lead', UserId, Date, 'LegacyLog', Description
+FROM dbo.LeadLogs;
+GO
+-- Migración de StageLeadLogs
+INSERT INTO dbo.AuditLogs (EntityId, EntityType, AuthorUserId, Timestamp, EventType, Description, ChangeData)
+SELECT LeadId, 'Lead', UserId, Date, 'StageChange', 
+       CONCAT('Cambio de etapa. Tardó ', Hours), -- Descripción genérica
+       CONCAT('{"oldStageId":', LastStageId, ',"newStageId":', StageId, '}') -- Guardamos los detalles en JSON
+FROM dbo.StageLeadLogs;
+GO
+
+-- ####################################################################
+-- ### MÓDULO 4: ACTIVIDADES Y SUS PLANTILLAS
+-- ####################################################################
+PRINT '--- Módulo 4: Evolucionando Actividades y sus Plantillas... ---';
+
+-- 4.1: Crear las nuevas tablas para las "Guías de Tareas"
+CREATE TABLE dbo.ActivityPlaybooks (
+    PlaybookId INT PRIMARY KEY IDENTITY(1,1),
+    AccountId INT NOT NULL,
+    Name NVARCHAR(255) NOT NULL,
+    CONSTRAINT FK_ActivityPlaybooks_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId)
+);
+GO
+CREATE TABLE dbo.PlaybookTasks (
+    TaskId INT PRIMARY KEY IDENTITY(1,1),
+    PlaybookId INT NOT NULL,
+    TaskName NVARCHAR(1000) NOT NULL,
+    "Order" INT NOT NULL,
+    CONSTRAINT FK_PlaybookTasks_Playbooks FOREIGN KEY (PlaybookId) REFERENCES dbo.ActivityPlaybooks(PlaybookId) ON DELETE CASCADE
+);
+GO
+
+-- 4.2: Migrar tus plantillas existentes
+INSERT INTO dbo.ActivityPlaybooks (AccountId, Name)
+SELECT a.AccountId, at.Name
+FROM dbo.ActivitiesTemplates at
+JOIN dbo.Accounts a ON at.Id = a.ActivitiesTemplateId; -- Asumiendo que la FK está en Accounts
+GO
+INSERT INTO dbo.PlaybookTasks (PlaybookId, TaskName, "Order")
+SELECT ap.PlaybookId, atr.Title, ISNULL(atr.ParentId, 0) -- Usamos ParentId como el orden, ajusta si es necesario
+FROM dbo.ActivitiesTemplatesRecords atr
+JOIN dbo.ActivitiesTemplates at ON atr.ActivitiesTemplatesId = at.Id
+JOIN dbo.ActivityPlaybooks ap ON at.Name = ap.Name;
+GO
+
+-- ####################################################################
+-- ### MÓDULO 5: CONFIGURACIÓN DE TELEFONÍA
+-- ####################################################################
+PRINT '--- Módulo 5: Formalizando Configuración de Telefonía... ---';
+
+ALTER TABLE dbo.Lines
+ADD CONSTRAINT PK_Lines PRIMARY KEY (Id);
+GO
+ALTER TABLE dbo.UserLines
+ADD CONSTRAINT FK_UserLines_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(Id);
+GO
+ALTER TABLE dbo.UserLines
+ADD CONSTRAINT FK_UserLines_Lines FOREIGN KEY (LineId) REFERENCES dbo.Lines(Id);
+GO
+
+-- ####################################################################
+-- ### MÓDULO 6: CATÁLOGOS FINALES
+-- ####################################################################
+PRINT '--- Módulo 6: Creando y Vinculando Catálogos Finales... ---';
+
+-- 6.1: Crear y poblar el nuevo catálogo de ProspectSources
+CREATE TABLE dbo.ProspectSources (
+    SourceId INT PRIMARY KEY IDENTITY(1,1),
+    Name NVARCHAR(100) NOT NULL
+);
+GO
+INSERT INTO dbo.ProspectSources (Name) VALUES 
+('Facebook'), ('Google'), ('LinkedIn'), ('Lead Booster'), ('Landing Page'), 
+('Visitante'), ('WhatsApp'), ('Expo'), ('Recomendación'), ('Llamada'), 
+('Inbox'), ('Instagram'), ('Correo'), ('Pagina Web'), ('Medio Tradicional'), 
+('Panorámico'), ('Broker'), ('Prospeccion');
+GO
+
+-- 6.2: Asegurar llaves primarias en catálogos existentes
+ALTER TABLE dbo.Industries
+ADD CONSTRAINT PK_Industries PRIMARY KEY (Id);
+GO
+ALTER TABLE dbo.ContactForms
+ADD CONSTRAINT PK_ContactForms PRIMARY KEY (Id);
+GO
+
+COMMIT TRANSACTION;
+GO
+
+
+PRINT '--- Añadiendo la columna ProspectSourceId a Leads_New y Deals... ---';
+
+ALTER TABLE dbo.Leads
+ADD ProspectSourceId INT NULL;
+GO
+
+ALTER TABLE dbo.Deals
+ADD ProspectSourceId INT NULL;
+GO
+
+PRINT '--- Migrando los datos de texto de ProspectSource a los nuevos IDs... ---';
+
+-- Migración para la tabla Deals
+UPDATE d
+SET d.ProspectSourceId = ps.SourceId
+FROM dbo.Deals d
+JOIN dbo.ProspectSources ps ON d.ProspectSource = ps.Name
+WHERE d.ProspectSource IS NOT NULL;
+GO
+
+-- Migración para la tabla Leads
+UPDATE ln
+SET ln.ProspectSourceId = ps.SourceId
+FROM dbo.Leads ln
+JOIN dbo.ProspectSources ps ON ln.ProspectSource = ps.Name
+WHERE ln.ProspectSource IS NOT NULL;
+GO
+
+PRINT '--- Limpiando columnas obsoletas y añadiendo llaves foráneas... ---';
+
+-- 1. Eliminar las viejas columnas de texto
+ALTER TABLE dbo.Deals
+DROP COLUMN ProspectSource;
+GO
+
+ALTER TABLE dbo.Leads
+DROP COLUMN ProspectSource;
+GO
+
+-- 2. Añadir las llaves foráneas a las nuevas columnas de ID
+ALTER TABLE dbo.Deals
+ADD CONSTRAINT FK_Deals_ProspectSources FOREIGN KEY (ProspectSourceId) REFERENCES dbo.ProspectSources(SourceId);
+GO
+
+ALTER TABLE dbo.Leads
+ADD CONSTRAINT FK_Leads_ProspectSources FOREIGN KEY (ProspectSourceId) REFERENCES dbo.ProspectSources(SourceId);
+GO

@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace profetApi.Models;
+namespace ProfetAPI.Models;
 
 public class Account
 {
