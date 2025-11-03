@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ProfetAPI.Models;
 
-public class Contact
+public class Lead
 {
     [Key]
     public int ContactId { get; set; }
