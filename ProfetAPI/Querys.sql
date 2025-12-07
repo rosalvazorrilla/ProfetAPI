@@ -1236,3 +1236,96 @@ GO
 ALTER TABLE dbo.Leads
 ADD CONSTRAINT FK_Leads_ProspectSources FOREIGN KEY (ProspectSourceId) REFERENCES dbo.ProspectSources(SourceId);
 GO
+
+
+-- BLOQUE 1: CREACIÓN DE COLUMNAS (Solo Estructura)
+BEGIN TRANSACTION;
+
+PRINT '--- 1. Agregando columnas faltantes... ---';
+
+-- Columnas estándar de Identity
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'NormalizedUserName' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD NormalizedUserName NVARCHAR(256) NULL;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'NormalizedEmail' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD NormalizedEmail NVARCHAR(256) NULL;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'EmailConfirmed' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD EmailConfirmed BIT NOT NULL DEFAULT 0;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'PasswordHash' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD PasswordHash NVARCHAR(MAX) NULL;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'SecurityStamp' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD SecurityStamp NVARCHAR(MAX) NULL;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'ConcurrencyStamp' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD ConcurrencyStamp NVARCHAR(MAX) NULL;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'PhoneNumberConfirmed' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD PhoneNumberConfirmed BIT NOT NULL DEFAULT 0;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'TwoFactorEnabled' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD TwoFactorEnabled BIT NOT NULL DEFAULT 0;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'LockoutEnd' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD LockoutEnd DATETIMEOFFSET NULL;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'LockoutEnabled' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD LockoutEnabled BIT NOT NULL DEFAULT 0;
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'AccessFailedCount' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD AccessFailedCount INT NOT NULL DEFAULT 0;
+
+-- Columnas Personalizadas (CreatedOn, UserType, ParentId)
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'CreatedOn' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE();
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'UserType' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD UserType NVARCHAR(50) NOT NULL DEFAULT 'Client';
+
+IF NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'ParentId' AND Object_ID = Object_ID(N'dbo.Users'))
+AND NOT EXISTS(SELECT * FROM sys.columns WHERE Name = N'parentId' AND Object_ID = Object_ID(N'dbo.Users'))
+    ALTER TABLE dbo.Users ADD ParentId NVARCHAR(128) NULL;
+
+COMMIT TRANSACTION;
+GO 
+-- ^^^ ESTE GO ES LA CLAVE. Obliga a que las columnas existan antes de seguir.
+
+
+-- BLOQUE 2: ACTUALIZACIÓN DE DATOS
+BEGIN TRANSACTION;
+
+PRINT '--- 2. Poblando datos normalizados... ---';
+
+-- Ahora sí, como ya ejecutamos el bloque anterior, estas columnas existen.
+UPDATE dbo.Users
+SET 
+    NormalizedUserName = UPPER(UserName),
+    NormalizedEmail = UPPER(Email),
+    SecurityStamp = NEWID() -- Generamos uno para evitar errores de seguridad en el login
+WHERE NormalizedUserName IS NULL;
+
+COMMIT TRANSACTION;
+GO
+
+
+-- BLOQUE 3: CREACIÓN DE ÍNDICES
+BEGIN TRANSACTION;
+
+PRINT '--- 3. Creando índices de rendimiento... ---';
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UserNameIndex' AND object_id = OBJECT_ID('dbo.Users'))
+BEGIN
+    CREATE UNIQUE NONCLUSTERED INDEX [UserNameIndex] ON [dbo].[Users] ([NormalizedUserName] ASC) WHERE ([NormalizedUserName] IS NOT NULL);
+END
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'EmailIndex' AND object_id = OBJECT_ID('dbo.Users'))
+BEGIN
+    CREATE INDEX [EmailIndex] ON [dbo].[Users] ([NormalizedEmail] ASC);
+END
+
+COMMIT TRANSACTION;
+GO
+
+PRINT '--- ¡REPARACIÓN COMPLETADA! ---';

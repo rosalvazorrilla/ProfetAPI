@@ -10,5 +10,5 @@ public class TemplateCategory
     [Required]
     public string Name { get; set; } = null!;
 
-    public virtual ICollection<ScoringTemplate> ScoringTemplates { get; set; } = new List<ScopingTemplate>();
+   // public virtual ICollection<ScoringTemplate> ScoringTemplates { get; set; } = new List<ScopingTemplate>();
 }

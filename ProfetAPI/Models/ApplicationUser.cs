@@ -9,6 +9,9 @@ namespace ProfetAPI.Models
         public string? ParentId { get; set; }
         public DateTime CreatedOn { get; set; } = DateTime.UtcNow;
 
+        public bool? Active { get; set; }   // <--- AGREGAR ESTO
+        public bool? Deleted { get; set; }  // <--- AGREGAR ESTO
+        public bool? HasWhatsApp { get; set; }
         // Propiedades de Navegación
         public virtual Customer? Customer { get; set; }
         public virtual UserProfile? UserProfile { get; set; }
