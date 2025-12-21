@@ -12,6 +12,7 @@ public class Contact
 
     [EmailAddress]
     public string? Email { get; set; }
+
     public string? PhoneNumber { get; set; }
     public string? Position { get; set; }
     public long? OriginatingLeadId { get; set; }

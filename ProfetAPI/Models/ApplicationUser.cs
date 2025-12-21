@@ -8,7 +8,7 @@ namespace ProfetAPI.Models
         public int? CustomerId { get; set; }
         public string? ParentId { get; set; }
         public DateTime CreatedOn { get; set; } = DateTime.UtcNow;
-
+        public string UserType { get; set; } = "Client"; // <--- ESTA ES LA QUE TE DA EL ERROR
         public bool? Active { get; set; }   // <--- AGREGAR ESTO
         public bool? Deleted { get; set; }  // <--- AGREGAR ESTO
         public bool? HasWhatsApp { get; set; }

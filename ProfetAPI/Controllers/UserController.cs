@@ -1,82 +1,106 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore; // Añade esto
 using ProfetAPI.Data;
-using ProfetAPI.Models;
 using ProfetAPI.Dtos;
+using ProfetAPI.Models;
+using Swashbuckle.AspNetCore.Annotations; // <--- 1. AGREGADO
 
 namespace ProfetAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [SwaggerTag("Gestión de Usuarios (Admin)")] // <--- 2. TÍTULO DE SECCIÓN
     public class UsersController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
         private readonly UserManager<ApplicationUser> _userManager;
-        private readonly RoleManager<ApplicationRole> _roleManager; // Añadido
+        private readonly RoleManager<ApplicationRole> _roleManager;
 
         public UsersController(
             ApplicationDbContext context,
             UserManager<ApplicationUser> userManager,
-            RoleManager<ApplicationRole> roleManager) // Añadido
+            RoleManager<ApplicationRole> roleManager)
         {
             _context = context;
             _userManager = userManager;
-            _roleManager = roleManager; // Añadido
+            _roleManager = roleManager;
         }
 
         // POST: api/users/create-global-admin
         [HttpPost("create-global-admin")]
-        public async Task<IActionResult> CreateGlobalAdmin([FromBody] CreateUserDto userDto)
+        // --- 3. DOCUMENTACIÓN DEL MÉTODO ---
+        [SwaggerOperation(
+            Summary = "Crear Admin Global",
+            Description = "Crea un superusuario interno, asigna el rol 'AdminGlobal' y crea su UserProfile."
+        )]
+        [SwaggerResponse(200, "Usuario creado correctamente")]
+        [SwaggerResponse(400, "Datos inválidos o el usuario ya existe")]
+        [SwaggerResponse(500, "Error interno al guardar en BD")]
+        public async Task<IActionResult> CreateGlobalAdmin([FromBody] CreateUserDto model)
         {
-            // Regla de seguridad: Solo permite crear un Admin Global si no existe ninguno.
-            var adminRoleExists = await _roleManager.RoleExistsAsync("AdminGlobal");
-            if (!adminRoleExists)
-            {
-                await _roleManager.CreateAsync(new ApplicationRole { Name = "AdminGlobal" });
-            }
+            // 1. Validar el modelo
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
 
-            var admins = await _userManager.GetUsersInRoleAsync("AdminGlobal");
-            if (admins.Any())
-            {
-                return BadRequest(new { message = "Ya existe un Administrador Global." });
-            }
+            // 2. Verificar si el correo ya existe
+            var userExists = await _userManager.FindByEmailAsync(model.Email);
+            if (userExists != null)
+                return BadRequest(new { message = "El usuario con ese correo ya existe." });
 
-            return await CreateUserInternal(userDto, "Internal");
-        }
-
-        // Método privado para crear cualquier usuario
-        private async Task<IActionResult> CreateUserInternal(CreateUserDto userDto, string userType)
-        {
-            var user = new ApplicationUser
+            // 3. Preparar el objeto ApplicationUser (TU LÓGICA ORIGINAL)
+            ApplicationUser user = new ApplicationUser()
             {
-                UserName = userDto.Email,
-                Email = userDto.Email,
-                CustomerId = userDto.CustomerId,
+                Email = model.Email,
+                UserName = model.Email,
+                SecurityStamp = Guid.NewGuid().ToString(),
+                Active = true,
+                Deleted = false,
                 CreatedOn = DateTime.UtcNow,
+                UserType = "Internal", // Admin Global es interno
+                CustomerId = model.CustomerId, // Será null para Admin Global
+                EmailConfirmed = true
             };
 
-            var result = await _userManager.CreateAsync(user, userDto.Password);
-            if (!result.Succeeded) return BadRequest(result.Errors);
+            // 4. Crear el usuario en BD
+            var result = await _userManager.CreateAsync(user, model.Password);
 
-            // Asegurarse de que el rol existe antes de asignarlo
-            if (!await _roleManager.RoleExistsAsync(userDto.Role))
+            if (!result.Succeeded)
             {
-                await _roleManager.CreateAsync(new ApplicationRole { Name = userDto.Role });
+                return StatusCode(500, new
+                {
+                    message = "Error al crear usuario",
+                    errors = result.Errors.Select(e => e.Description)
+                });
             }
-            await _userManager.AddToRoleAsync(user, userDto.Role);
 
+            string roleToAssign = !string.IsNullOrEmpty(model.Role) ? model.Role : "AdminGlobal";
+
+            // Validar/Crear Rol
+            if (!await _roleManager.RoleExistsAsync(roleToAssign))
+            {
+                var newRole = new ApplicationRole
+                {
+                    Name = roleToAssign,
+                };
+                await _roleManager.CreateAsync(newRole);
+            }
+
+            await _userManager.AddToRoleAsync(user, roleToAssign);
+
+            // Crear Perfil (UserProfile)
             var userProfile = new UserProfile
             {
                 UserId = user.Id,
-                FirstName = userDto.FirstName,
-                LastName = userDto.LastName,
-                Phone = userDto.Phone, // Asumiendo que quieres añadir esto al DTO
+                FirstName = model.FirstName,
+                LastName = model.LastName,
+                Phone = model.Phone,
+                Preferences = "{}"
             };
+
             _context.UserProfiles.Add(userProfile);
             await _context.SaveChangesAsync();
 
-            return Ok(new { UserId = user.Id, Email = user.Email, Role = userDto.Role });
+            return Ok(new { message = "Usuario Admin Global creado exitosamente", userId = user.Id });
         }
     }
 }
