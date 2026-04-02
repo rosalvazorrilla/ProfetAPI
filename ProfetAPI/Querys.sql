@@ -1,6 +1,20 @@
 --Se divide la info de user
 -- 1. Asegurar llave primaria en Customers
 
+-- Agregar Email (vital para la invitación)
+ALTER TABLE Customers ADD Email VARCHAR(255) NULL;
+
+-- Agregar controles del Wizard
+ALTER TABLE Customers ADD SetupToken VARCHAR(128) NULL;
+ALTER TABLE Customers ADD SetupStep INT NOT NULL DEFAULT 0;
+
+-- Agregar el nuevo campo de Estatus
+ALTER TABLE Customers ADD Status VARCHAR(50) NOT NULL DEFAULT 'Pendiente de Setup';
+
+-- Crear índice para que el login con token sea rapidísimo
+CREATE INDEX IX_Customers_SetupToken ON Customers(SetupToken);
+
+
 CREATE TABLE dbo.UserProfiles (
     UserId NVARCHAR(128) NOT NULL,
     FirstName NVARCHAR(MAX) NULL,
@@ -1329,3 +1343,18 @@ COMMIT TRANSACTION;
 GO
 
 PRINT '--- ¡REPARACIÓN COMPLETADA! ---';
+
+
+ALTER TABLE Features 
+ADD [Type] NVARCHAR(20) NOT NULL DEFAULT 'Numeric'; 
+
+-- 2. Actualizamos AddOns para que tengan un valor base y sepamos si se suma
+ALTER TABLE AddOns 
+ADD [Value] DECIMAL(18,2) NOT NULL DEFAULT 0,
+    [IsAdditive] BIT NOT NULL DEFAULT 1; -- 1 = Suma al plan, 0 = Solo activa/reemplaza
+
+-- 3. Aseguramos que la compra del cliente guarde la personalización
+-- Si ya existen estos campos, puedes saltar este paso
+ALTER TABLE CustomerPurchasedAddOns 
+ADD [Quantity] INT NOT NULL DEFAULT 1,
+    [PricePaid] DECIMAL(18,2) NOT NULL DEFAULT 0;
