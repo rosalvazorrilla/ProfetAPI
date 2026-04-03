@@ -24,7 +24,7 @@ public class CustomFieldDefinitionsController : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var list = await _context.CustomFieldDefinitions
-            .Select(f => new CustomFieldDefinitionResponseDto { Id = f.Id, FieldCode = f.Value, FieldName = f.Description, FieldType = f.FieldType })
+            .Select(f => new CustomFieldDefinitionResponseDto { Id = f.FieldId, FieldCode = f.FieldCode, FieldName = f.FieldName, FieldType = f.FieldType })
             .ToListAsync();
         return Ok(list);
     }
@@ -38,7 +38,7 @@ public class CustomFieldDefinitionsController : ControllerBase
     {
         var f = await _context.CustomFieldDefinitions.FindAsync(id);
         if (f == null) return NotFound(new { message = "Variable no encontrada." });
-        return Ok(new CustomFieldDefinitionResponseDto { Id = f.Id, FieldCode = f.Value, FieldName = f.Description, FieldType = f.FieldType });
+        return Ok(new CustomFieldDefinitionResponseDto { Id = f.FieldId, FieldCode = f.FieldCode, FieldName = f.FieldName, FieldType = f.FieldType });
     }
 
     // POST: api/customfielddefinitions
@@ -51,15 +51,15 @@ public class CustomFieldDefinitionsController : ControllerBase
         if (!ModelState.IsValid) return BadRequest(ModelState);
 
         // Verificar que el FieldCode no esté duplicado
-        var exists = await _context.CustomFieldDefinitions.AnyAsync(f => f.Value == model.FieldCode);
+        var exists = await _context.CustomFieldDefinitions.AnyAsync(f => f.FieldCode == model.FieldCode);
         if (exists) return BadRequest(new { message = $"Ya existe una variable con el código '{model.FieldCode}'." });
 
-        var field = new CustomFieldDefinition { Value = model.FieldCode, Description = model.FieldName, FieldType = model.FieldType };
+        var field = new CustomFieldDefinition { FieldCode = model.FieldCode, FieldName = model.FieldName, FieldType = model.FieldType };
         _context.CustomFieldDefinitions.Add(field);
         await _context.SaveChangesAsync();
 
-        var response = new CustomFieldDefinitionResponseDto { Id = field.Id, FieldCode = field.Value, FieldName = field.Description, FieldType = field.FieldType };
-        return CreatedAtAction(nameof(GetById), new { id = field.Id }, response);
+        var response = new CustomFieldDefinitionResponseDto { Id = field.FieldId, FieldCode = field.FieldCode, FieldName = field.FieldName, FieldType = field.FieldType };
+        return CreatedAtAction(nameof(GetById), new { id = field.FieldId }, response);
     }
 
     // PUT: api/customfielddefinitions/5
@@ -72,11 +72,11 @@ public class CustomFieldDefinitionsController : ControllerBase
         var field = await _context.CustomFieldDefinitions.FindAsync(id);
         if (field == null) return NotFound(new { message = "Variable no encontrada." });
 
-        field.Description = model.FieldName;
+        field.FieldName = model.FieldName;
         field.FieldType = model.FieldType;
         await _context.SaveChangesAsync();
 
-        return Ok(new CustomFieldDefinitionResponseDto { Id = field.Id, FieldCode = field.Value, FieldName = field.Description, FieldType = field.FieldType });
+        return Ok(new CustomFieldDefinitionResponseDto { Id = field.FieldId, FieldCode = field.FieldCode, FieldName = field.FieldName, FieldType = field.FieldType });
     }
 
     // DELETE: api/customfielddefinitions/5
