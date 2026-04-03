@@ -7,13 +7,13 @@ public class CustomFieldDefinition
 {
     [Key]
     [Column("FieldId")]
-    public int Id { get; set; }
+    public int FieldId { get; set; }
 
     [Column("FieldCode")]
-    public string? Value { get; set; }
+    public string? FieldCode { get; set; }
 
     [Column("FieldName")]
-    public string? Description { get; set; }
+    public string? FieldName { get; set; }
 
     [Required]
     public string FieldType { get; set; } = "Text";

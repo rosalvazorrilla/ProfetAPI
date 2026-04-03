@@ -1426,7 +1426,7 @@ namespace ProfetAPI.Controllers
                 var industries = await _context.AccountIndustries
                     .Where(ai => ai.AccountId == a.AccountId)
                     .Include(ai => ai.Industry)
-                    .Select(ai => ai.Industry.Name)
+                    .Select(ai => ai.Industry.NameES)
                     .ToListAsync();
 
                 var funnel = a.Funnels.FirstOrDefault();

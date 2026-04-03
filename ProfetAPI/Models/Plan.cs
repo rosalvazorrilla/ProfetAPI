@@ -18,7 +18,7 @@ namespace ProfetAPI.Models
         public bool IsActive { get; set; }
 
         // Propiedades de navegación
-        public virtual ICollection<PlanPriceHistory> PriceHistory { get; set; } = new List<PlanPriceHistory>();
+        public virtual ICollection<PlanPriceHistory> PlanPriceHistories { get; set; } = new List<PlanPriceHistory>();
         public virtual ICollection<PlanFeature> PlanFeatures { get; set; } = new List<PlanFeature>();
         public virtual ICollection<Subscription> Subscriptions { get; set; } = new List<Subscription>();
     }
