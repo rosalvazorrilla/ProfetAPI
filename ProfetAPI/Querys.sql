@@ -1355,6 +1355,198 @@ ADD [Value] DECIMAL(18,2) NOT NULL DEFAULT 0,
 
 -- 3. Aseguramos que la compra del cliente guarde la personalización
 -- Si ya existen estos campos, puedes saltar este paso
-ALTER TABLE CustomerPurchasedAddOns 
+ALTER TABLE CustomerPurchasedAddOns
 ADD [Quantity] INT NOT NULL DEFAULT 1,
+
     [PricePaid] DECIMAL(18,2) NOT NULL DEFAULT 0;
+
+-- ============================================================
+-- FASE 1 — CATÁLOGOS ADMIN GLOBAL + SCORING REDISEÑADO
+-- Fecha: 2026-04-02
+-- EJECUTAR ESTE BLOQUE COMPLETO EN Profet_new
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- 1. TABLA: AccountIndustries (junction Account <-> Industry)
+--    (ya existe en la DB vieja, la recreamos limpia para el nuevo esquema)
+-- ------------------------------------------------------------
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AccountIndustries')
+BEGIN
+    CREATE TABLE [dbo].[AccountIndustries] (
+        [Id]         BIGINT IDENTITY(1,1) NOT NULL,
+        [AccountId]  INT    NOT NULL,
+        [IndustryId] BIGINT NOT NULL,
+        CONSTRAINT [PK_AccountIndustries] PRIMARY KEY CLUSTERED ([Id] ASC),
+        CONSTRAINT [FK_AccountIndustries_Accounts]   FOREIGN KEY ([AccountId])  REFERENCES [dbo].[Accounts]([AccountId]),
+        CONSTRAINT [FK_AccountIndustries_Industries] FOREIGN KEY ([IndustryId]) REFERENCES [dbo].[Industries]([Id])
+    );
+END
+GO
+
+-- ------------------------------------------------------------
+-- 2. TABLA: LeadLostReasons (catálogo global — Admin lo pre-carga)
+-- ------------------------------------------------------------
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'LeadLostReasons')
+BEGIN
+    CREATE TABLE [dbo].[LeadLostReasons] (
+        [Id]             INT IDENTITY(1,1) NOT NULL,
+        [Description]    NVARCHAR(200)     NOT NULL,
+        [ConversionRate] BIT               NOT NULL DEFAULT 0,
+        [IsActive]       BIT               NOT NULL DEFAULT 1,
+        CONSTRAINT [PK_LeadLostReasons] PRIMARY KEY CLUSTERED ([Id] ASC)
+    );
+END
+GO
+
+-- ------------------------------------------------------------
+-- 3. TABLA: AccountLeadLostReasons (qué razones habilita cada Account)
+-- ------------------------------------------------------------
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AccountLeadLostReasons')
+BEGIN
+    CREATE TABLE [dbo].[AccountLeadLostReasons] (
+        [AccountId]      INT NOT NULL,
+        [LostReasonId]   INT NOT NULL,
+        CONSTRAINT [PK_AccountLeadLostReasons] PRIMARY KEY CLUSTERED ([AccountId] ASC, [LostReasonId] ASC),
+        CONSTRAINT [FK_AccLostReasons_Accounts]   FOREIGN KEY ([AccountId])    REFERENCES [dbo].[Accounts]([AccountId]),
+        CONSTRAINT [FK_AccLostReasons_LostReasons] FOREIGN KEY ([LostReasonId]) REFERENCES [dbo].[LeadLostReasons]([Id])
+    );
+END
+GO
+
+-- ------------------------------------------------------------
+-- 4. SCORING — Agregar campos a tablas existentes
+-- ------------------------------------------------------------
+
+-- ScoringTemplateQuestions: tipo de pregunta, obligatoriedad y orden
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringTemplateQuestions') AND name = 'QuestionType')
+    ALTER TABLE [dbo].[ScoringTemplateQuestions] ADD [QuestionType] NVARCHAR(20) NOT NULL DEFAULT 'SingleChoice';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringTemplateQuestions') AND name = 'IsRequired')
+    ALTER TABLE [dbo].[ScoringTemplateQuestions] ADD [IsRequired] BIT NOT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringTemplateQuestions') AND name = 'OrderPosition')
+    ALTER TABLE [dbo].[ScoringTemplateQuestions] ADD [OrderPosition] INT NOT NULL DEFAULT 0;
+GO
+
+-- ScoringTemplateAnswerOptions: puntos directos y orden
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringTemplateAnswerOptions') AND name = 'Points')
+    ALTER TABLE [dbo].[ScoringTemplateAnswerOptions] ADD [Points] DECIMAL(10,2) NOT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringTemplateAnswerOptions') AND name = 'OrderPosition')
+    ALTER TABLE [dbo].[ScoringTemplateAnswerOptions] ADD [OrderPosition] INT NOT NULL DEFAULT 0;
+GO
+
+-- ScoringTemplates: vínculo a industria
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringTemplates') AND name = 'IndustryId')
+    ALTER TABLE [dbo].[ScoringTemplates] ADD [IndustryId] BIGINT NULL REFERENCES [dbo].[Industries]([Id]);
+GO
+
+-- ScoringQuestions: tipo, obligatoriedad y orden (instancia del account)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringQuestions') AND name = 'QuestionType')
+    ALTER TABLE [dbo].[ScoringQuestions] ADD [QuestionType] NVARCHAR(20) NOT NULL DEFAULT 'SingleChoice';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringQuestions') AND name = 'IsRequired')
+    ALTER TABLE [dbo].[ScoringQuestions] ADD [IsRequired] BIT NOT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringQuestions') AND name = 'OrderPosition')
+    ALTER TABLE [dbo].[ScoringQuestions] ADD [OrderPosition] INT NOT NULL DEFAULT 0;
+GO
+
+-- ScoringAnswerOptions: puntos directos y orden
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringAnswerOptions') AND name = 'Points')
+    ALTER TABLE [dbo].[ScoringAnswerOptions] ADD [Points] DECIMAL(10,2) NOT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringAnswerOptions') AND name = 'OrderPosition')
+    ALTER TABLE [dbo].[ScoringAnswerOptions] ADD [OrderPosition] INT NOT NULL DEFAULT 0;
+GO
+
+-- LeadTiers: convertirlos en umbrales por ScoringModel
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadTiers') AND name = 'ScoringModelId')
+    ALTER TABLE [dbo].[LeadTiers] ADD [ScoringModelId] INT NULL REFERENCES [dbo].[ScoringModels]([ScoringModelId]);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadTiers') AND name = 'MinScore')
+    ALTER TABLE [dbo].[LeadTiers] ADD [MinScore] DECIMAL(10,2) NOT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadTiers') AND name = 'MaxScore')
+    ALTER TABLE [dbo].[LeadTiers] ADD [MaxScore] DECIMAL(10,2) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadTiers') AND name = 'Color')
+    ALTER TABLE [dbo].[LeadTiers] ADD [Color] NVARCHAR(50) NULL;
+GO
+
+-- LeadScoringAnswers: soporte para respuestas abiertas y puntos guardados
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadScoringAnswers') AND name = 'TextValue')
+    ALTER TABLE [dbo].[LeadScoringAnswers] ADD [TextValue] NVARCHAR(MAX) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadScoringAnswers') AND name = 'NumericValue')
+    ALTER TABLE [dbo].[LeadScoringAnswers] ADD [NumericValue] DECIMAL(10,2) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadScoringAnswers') AND name = 'PointsAwarded')
+    ALTER TABLE [dbo].[LeadScoringAnswers] ADD [PointsAwarded] DECIMAL(10,2) NOT NULL DEFAULT 0;
+GO
+
+-- ScoringRules: nombre descriptivo y puntos de bono directos
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringRules') AND name = 'Name')
+    ALTER TABLE [dbo].[ScoringRules] ADD [Name] NVARCHAR(200) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringRules') AND name = 'BonusPoints')
+    ALTER TABLE [dbo].[ScoringRules] ADD [BonusPoints] DECIMAL(10,2) NOT NULL DEFAULT 0;
+GO
+
+-- ------------------------------------------------------------
+-- 5. TABLA: ScoringRuleConditions (condiciones compuestas AND/OR)
+-- ------------------------------------------------------------
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ScoringRuleConditions')
+BEGIN
+    CREATE TABLE [dbo].[ScoringRuleConditions] (
+        [ConditionId]    INT IDENTITY(1,1) NOT NULL,
+        [RuleId]         INT          NOT NULL,
+        [QuestionId]     INT          NOT NULL,
+        [AnswerOptionId] INT          NOT NULL,
+        [LogicOperator]  NVARCHAR(5)  NOT NULL DEFAULT 'AND',  -- 'AND' | 'OR'
+        CONSTRAINT [PK_ScoringRuleConditions] PRIMARY KEY CLUSTERED ([ConditionId] ASC),
+        CONSTRAINT [FK_ScoringRuleCond_Rule]   FOREIGN KEY ([RuleId])         REFERENCES [dbo].[ScoringRules]([RuleId]),
+        CONSTRAINT [FK_ScoringRuleCond_Ques]   FOREIGN KEY ([QuestionId])     REFERENCES [dbo].[ScoringQuestions]([QuestionId]),
+        CONSTRAINT [FK_ScoringRuleCond_Ans]    FOREIGN KEY ([AnswerOptionId]) REFERENCES [dbo].[ScoringAnswerOptions]([AnswerOptionId])
+    );
+END
+GO
+
+-- ============================================================
+-- FIN FASE 1 — CATÁLOGOS ADMIN GLOBAL + SCORING REDISEÑADO
+-- ============================================================
+
+-- ============================================================
+-- SUSCRIPCIONES — OVERRIDES POR CLIENTE
+-- Fecha: 2026-04-02
+-- Permite negociar límites de features distintos al plan base
+-- EJECUTAR EN Profet_new
+-- ============================================================
+
+-- CustomerPurchasedAddOns: Quantity ya fue agregado en bloque anterior.
+-- Solo verificar que PricePaid exista (por si se ejecuta en DB limpia).
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CustomerPurchasedAddOns') AND name = 'Quantity')
+    ALTER TABLE [dbo].[CustomerPurchasedAddOns] ADD [Quantity] INT NOT NULL DEFAULT 1;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CustomerPurchasedAddOns') AND name = 'PricePaid')
+    ALTER TABLE [dbo].[CustomerPurchasedAddOns] ADD [PricePaid] DECIMAL(18,2) NOT NULL DEFAULT 0;
+GO
+
+-- Nueva tabla: límites de features negociados por cliente
+-- Tiene prioridad sobre PlanFeatures al calcular límites reales del tenant
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'SubscriptionFeatureOverrides')
+BEGIN
+    CREATE TABLE [dbo].[SubscriptionFeatureOverrides] (
+        [SubscriptionId] INT           NOT NULL,
+        [FeatureId]      INT           NOT NULL,
+        [CustomLimit]    NVARCHAR(50)  NOT NULL,
+        CONSTRAINT [PK_SubFeatureOverrides] PRIMARY KEY CLUSTERED ([SubscriptionId] ASC, [FeatureId] ASC),
+        CONSTRAINT [FK_SubFeatOverride_Sub]     FOREIGN KEY ([SubscriptionId]) REFERENCES [dbo].[Subscriptions]([SubscriptionId]),
+        CONSTRAINT [FK_SubFeatOverride_Feature] FOREIGN KEY ([FeatureId])      REFERENCES [dbo].[Features]([FeatureId])
+    );
+END
+GO
+
+-- ============================================================
+-- FIN SUSCRIPCIONES — OVERRIDES
+-- ============================================================

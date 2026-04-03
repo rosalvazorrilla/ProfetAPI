@@ -1,0 +1,587 @@
+{
+  "info": {
+    "name": "ProfetAPI — Setup Wizard",
+    "description": "Wizard de configuración inicial del cliente. Autenticación por token en query param (?token=...). Flujo recomendado: Status → Cuentas → Industrias → Embudo → Variables → Scoring → Catálogos → Usuarios → Equipos → Asignar usuarios → Preview → Completar",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",    "value": "http://localhost:5051", "type": "string" },
+    { "key": "token",      "value": "TU_SETUP_TOKEN_AQUI",  "type": "string" },
+    { "key": "accountId",  "value": "1",                    "type": "string" },
+    { "key": "userId",     "value": "USER_ID_AQUI",         "type": "string" },
+    { "key": "teamId",     "value": "1",                    "type": "string" }
+  ],
+  "item": [
+
+    {
+      "name": "📊 Status & Paso",
+      "item": [
+        {
+          "name": "GET Estado del wizard (checklist completo)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/status?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","status"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          },
+          "description": "Devuelve checklist derivado de datos reales por cada cuenta: embudo, variables, scoring, catálogos, usuarios. También indica CanComplete y lista de errores/advertencias."
+        },
+        {
+          "name": "PUT Guardar último paso visitado (UX)",
+          "request": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/step?token={{token}}&step=3",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","step"],
+              "query": [
+                { "key": "token", "value": "{{token}}" },
+                { "key": "step", "value": "3" }
+              ]
+            }
+          },
+          "description": "Solo actualiza SetupStep en el Customer para que el frontend retome donde se quedó. No valida datos."
+        }
+      ]
+    },
+
+    {
+      "name": "🏢 Cuentas",
+      "item": [
+        {
+          "name": "GET Listar cuentas",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        },
+        {
+          "name": "POST Crear cuenta",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ventas B2B\",\n  \"description\": \"Campaña principal de ventas corporativas\",\n  \"assignmentType\": \"Carrusel\",\n  \"assignmentUserId\": null\n}"
+            }
+          },
+          "description": "Crea una cuenta en estado 'Borrador'. Pueden crearse múltiples cuentas. AssignmentType: 'Carrusel' | 'Manual' | 'Usuario'."
+        },
+        {
+          "name": "POST Crear segunda cuenta",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Soporte y Renovaciones\",\n  \"description\": \"Gestión de clientes actuales\",\n  \"assignmentType\": \"Manual\"\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar cuenta",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ventas B2B — Actualizado\",\n  \"description\": \"Descripción actualizada\",\n  \"assignmentType\": \"Carrusel\"\n}"
+            }
+          }
+        },
+        {
+          "name": "DELETE Eliminar cuenta (solo Borrador)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "🏭 Industrias por Cuenta",
+      "item": [
+        {
+          "name": "PUT Asignar sectores a la cuenta",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/industries?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","industries"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"industryIds\": [1, 3]\n}"
+            }
+          },
+          "description": "Reemplaza las industrias actuales de la cuenta. Los IDs deben existir en el catálogo global de Industries."
+        }
+      ]
+    },
+
+    {
+      "name": "🔀 Embudo",
+      "item": [
+        {
+          "name": "GET Ver embudo de la cuenta",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/funnel?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","funnel"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        },
+        {
+          "name": "PUT Configurar embudo (desde plantilla)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/funnel?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","funnel"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": 1,\n  \"stages\": []\n}"
+            }
+          },
+          "description": "Clona la plantilla indicada. Si templateId es null, usa las stages del array."
+        },
+        {
+          "name": "PUT Configurar embudo (personalizado)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/funnel?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","funnel"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": null,\n  \"stages\": [\n    { \"name\": \"Prospecto\",        \"order\": 1, \"color\": \"#95a5a6\" },\n    { \"name\": \"Contactado\",       \"order\": 2, \"color\": \"#3498db\" },\n    { \"name\": \"Propuesta\",        \"order\": 3, \"color\": \"#f39c12\" },\n    { \"name\": \"Negociación\",      \"order\": 4, \"color\": \"#e67e22\" },\n    { \"name\": \"Cerrado Ganado\",   \"order\": 5, \"color\": \"#27ae60\" },\n    { \"name\": \"Cerrado Perdido\",  \"order\": 6, \"color\": \"#e74c3c\" }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar etapas del embudo",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/funnel/stages?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","funnel","stages"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stages\": [\n    { \"stageId\": 1, \"name\": \"Prospecto\",   \"order\": 1, \"color\": \"#95a5a6\" },\n    { \"stageId\": 2, \"name\": \"Calificado\",  \"order\": 2, \"color\": \"#3498db\" },\n    { \"stageId\": null, \"name\": \"Demo\",     \"order\": 3, \"color\": \"#9b59b6\" },\n    { \"stageId\": 4, \"name\": \"Propuesta\",   \"order\": 4, \"color\": \"#f39c12\" }\n  ]\n}"
+            }
+          },
+          "description": "stageId = null crea una etapa nueva. Etapas existentes no incluidas serán eliminadas."
+        }
+      ]
+    },
+
+    {
+      "name": "📋 Variables (Campos Personalizados)",
+      "item": [
+        {
+          "name": "GET Variables activas de la cuenta",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/variables?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","variables"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        },
+        {
+          "name": "PUT Activar variables para la cuenta",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/variables?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","variables"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fields\": [\n    { \"fieldId\": 1, \"isVisibleOnCard\": true },\n    { \"fieldId\": 2, \"isVisibleOnCard\": false },\n    { \"fieldId\": 3, \"isVisibleOnCard\": true }\n  ]\n}"
+            }
+          },
+          "description": "Reemplaza las variables activas. Los FieldId deben existir en el catálogo global de CustomFieldDefinitions."
+        }
+      ]
+    },
+
+    {
+      "name": "⭐ Scoring (Calificación)",
+      "item": [
+        {
+          "name": "GET Modelo de calificación de la cuenta",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/scoring?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","scoring"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        },
+        {
+          "name": "PUT Configurar scoring (desde template)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/scoring?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","scoring"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": 1,\n  \"modelName\": \"Calificación B2B\",\n  \"questions\": [],\n  \"tiers\": []\n}"
+            }
+          },
+          "description": "Clona preguntas y respuestas del ScoringTemplate. tiers: [] = se crean 3 por defecto (Frío/Tibio/Caliente)."
+        },
+        {
+          "name": "PUT Configurar scoring (manual con tiers personalizados)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/scoring?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","scoring"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": null,\n  \"modelName\": \"Modelo de Calificación Personalizado\",\n  \"questions\": [\n    {\n      \"questionText\": \"¿Cuál es el tamaño de su empresa?\",\n      \"questionType\": \"SingleChoice\",\n      \"isRequired\": true,\n      \"orderPosition\": 1,\n      \"answerOptions\": [\n        { \"answerText\": \"1-10 empleados\",    \"points\": 5,  \"orderPosition\": 1 },\n        { \"answerText\": \"11-50 empleados\",   \"points\": 10, \"orderPosition\": 2 },\n        { \"answerText\": \"51-200 empleados\",  \"points\": 20, \"orderPosition\": 3 },\n        { \"answerText\": \"200+ empleados\",    \"points\": 30, \"orderPosition\": 4 }\n      ]\n    },\n    {\n      \"questionText\": \"¿Cuál es su presupuesto mensual estimado?\",\n      \"questionType\": \"SingleChoice\",\n      \"isRequired\": true,\n      \"orderPosition\": 2,\n      \"answerOptions\": [\n        { \"answerText\": \"Menos de $5,000\",     \"points\": 5,  \"orderPosition\": 1 },\n        { \"answerText\": \"$5,000 - $20,000\",   \"points\": 15, \"orderPosition\": 2 },\n        { \"answerText\": \"$20,000 - $50,000\",  \"points\": 25, \"orderPosition\": 3 },\n        { \"answerText\": \"Más de $50,000\",     \"points\": 40, \"orderPosition\": 4 }\n      ]\n    },\n    {\n      \"questionText\": \"¿En cuánto tiempo planea tomar la decisión?\",\n      \"questionType\": \"SingleChoice\",\n      \"isRequired\": false,\n      \"orderPosition\": 3,\n      \"answerOptions\": [\n        { \"answerText\": \"Más de 6 meses\",  \"points\": 5,  \"orderPosition\": 1 },\n        { \"answerText\": \"3-6 meses\",       \"points\": 10, \"orderPosition\": 2 },\n        { \"answerText\": \"1-3 meses\",       \"points\": 20, \"orderPosition\": 3 },\n        { \"answerText\": \"Inmediato\",       \"points\": 30, \"orderPosition\": 4 }\n      ]\n    }\n  ],\n  \"tiers\": [\n    { \"name\": \"Frío\",     \"minScore\": 0,  \"maxScore\": 29,  \"color\": \"#3498db\" },\n    { \"name\": \"Tibio\",   \"minScore\": 30, \"maxScore\": 59,  \"color\": \"#f39c12\" },\n    { \"name\": \"Caliente\",\"minScore\": 60, \"maxScore\": 89,  \"color\": \"#e67e22\" },\n    { \"name\": \"En llamas\",\"minScore\": 90, \"maxScore\": null, \"color\": \"#e74c3c\" }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Reemplazar preguntas del scoring",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/scoring/questions?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","scoring","questions"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"questions\": [\n    {\n      \"questionText\": \"Pregunta actualizada 1\",\n      \"questionType\": \"SingleChoice\",\n      \"isRequired\": true,\n      \"orderPosition\": 1,\n      \"answerOptions\": [\n        { \"answerText\": \"Opción A\", \"points\": 10, \"orderPosition\": 1 },\n        { \"answerText\": \"Opción B\", \"points\": 20, \"orderPosition\": 2 }\n      ]\n    }\n  ]\n}"
+            }
+          },
+          "description": "Elimina todas las preguntas/respuestas actuales y las reemplaza. No modifica los tiers."
+        }
+      ]
+    },
+
+    {
+      "name": "📂 Catálogos",
+      "item": [
+        {
+          "name": "GET Catálogos activos de la cuenta",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/catalogs?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","catalogs"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        },
+        {
+          "name": "PUT Configurar catálogos (motivos pérdida + tags)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/catalogs?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","catalogs"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lostReasonIds\": [1, 2, 3],\n  \"prospectSourceIds\": [],\n  \"tags\": [\n    { \"name\": \"VIP\",          \"color\": \"#f1c40f\", \"fontColor\": \"#000000\" },\n    { \"name\": \"Prioritario\",  \"color\": \"#e74c3c\", \"fontColor\": \"#ffffff\" },\n    { \"name\": \"Referido\",     \"color\": \"#27ae60\", \"fontColor\": \"#ffffff\" }\n  ]\n}"
+            }
+          },
+          "description": "Asigna motivos de pérdida del catálogo global. Los tags se agregan (no reemplazan) para no borrar tags ya usados en leads."
+        }
+      ]
+    },
+
+    {
+      "name": "👤 Usuarios",
+      "item": [
+        {
+          "name": "GET Listar usuarios del customer",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/users?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","users"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        },
+        {
+          "name": "POST Crear usuario (AccountAdmin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/users?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","users"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@empresademo.com\",\n  \"password\": \"Password123!\",\n  \"firstName\": \"Carlos\",\n  \"lastName\": \"Ramírez\",\n  \"phone\": \"5512341234\",\n  \"role\": \"AccountAdmin\"\n}"
+            }
+          },
+          "description": "Crea el usuario con Active=false. Se activará al completar el setup. Roles: 'AccountAdmin' | 'SalesRep' | 'Viewer'."
+        },
+        {
+          "name": "POST Crear usuario (SalesRep)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/users?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","users"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"vendedor1@empresademo.com\",\n  \"password\": \"Password123!\",\n  \"firstName\": \"Ana\",\n  \"lastName\": \"López\",\n  \"phone\": null,\n  \"role\": \"SalesRep\"\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar usuario",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/users/{{userId}}?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","users","{{userId}}"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Carlos Alberto\",\n  \"lastName\": \"Ramírez Torres\",\n  \"phone\": \"5587654321\",\n  \"role\": \"AccountAdmin\"\n}"
+            }
+          }
+        },
+        {
+          "name": "DELETE Eliminar usuario (borrador)",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/users/{{userId}}?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","users","{{userId}}"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "🔗 Asignación Usuario → Cuenta",
+      "item": [
+        {
+          "name": "POST Asignar usuario a cuenta",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/users?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","users"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"roleInAccount\": \"Admin\"\n}"
+            }
+          },
+          "description": "Vincula un usuario del pool del wizard a una cuenta específica con un rol. RoleInAccount: 'Admin' | 'SalesRep' | 'Viewer'. Si el usuario ya estaba asignado con otro rol, lo reemplaza."
+        },
+        {
+          "name": "DELETE Desasignar usuario de cuenta",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/accounts/{{accountId}}/users/{{userId}}?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","accounts","{{accountId}}","users","{{userId}}"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "👥 Equipos",
+      "item": [
+        {
+          "name": "GET Listar equipos",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/teams?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","teams"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        },
+        {
+          "name": "POST Crear equipo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/teams?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","teams"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Equipo de Ventas Norte\",\n  \"userIds\": [\"{{userId}}\"]\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar equipo",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/teams/{{teamId}}?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","teams","{{teamId}}"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Equipo de Ventas Norte — Actualizado\",\n  \"userIds\": [\"{{userId}}\"]\n}"
+            }
+          },
+          "description": "Actualiza nombre y REEMPLAZA la lista de miembros."
+        },
+        {
+          "name": "DELETE Eliminar equipo",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/teams/{{teamId}}?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","teams","{{teamId}}"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "🔍 Preview + Completar",
+      "item": [
+        {
+          "name": "GET Preview completo del setup",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/preview?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","preview"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          },
+          "description": "Devuelve resumen completo: datos del customer, todas las cuentas con su config, usuarios, equipos, y validación (IsValid + errores + advertencias). Usar antes de Completar."
+        },
+        {
+          "name": "POST Completar setup (activar todo)",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/setup/complete?token={{token}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","setup","complete"],
+              "query": [{ "key": "token", "value": "{{token}}" }]
+            }
+          },
+          "description": "⚠️ IRREVERSIBLE. Activa: todas las cuentas (Borrador→Activo), todos los usuarios (Active=false→true), Customer.Status='Activo'. Invalida el token de setup. Requiere al menos 1 cuenta con embudo."
+        }
+      ]
+    }
+
+  ]
+}

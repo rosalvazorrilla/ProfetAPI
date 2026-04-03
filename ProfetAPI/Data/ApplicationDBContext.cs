@@ -34,18 +34,25 @@ namespace ProfetAPI.Data
         public DbSet<Subscription> Subscriptions { get; set; } = null!;
         public DbSet<SubscriptionPeriod> SubscriptionPeriods { get; set; } = null!;
         public DbSet<CustomerPurchasedAddOn> CustomerPurchasedAddOns { get; set; } = null!;
+        public DbSet<SubscriptionFeatureOverride> SubscriptionFeatureOverrides { get; set; } = null!;
         
         // --- DBSETS PARA EL MOTOR DE CALIFICACIÓN ---
         public DbSet<ScoringModel> ScoringModels { get; set; } = null!;
         public DbSet<ScoringQuestion> ScoringQuestions { get; set; } = null!;
         public DbSet<ScoringAnswerOption> ScoringAnswerOptions { get; set; } = null!;
         public DbSet<ScoringRule> ScoringRules { get; set; } = null!;
+        public DbSet<ScoringRuleCondition> ScoringRuleConditions { get; set; } = null!;
         public DbSet<LeadTier> LeadTiers { get; set; } = null!;
         public DbSet<LeadScoringAnswer> LeadScoringAnswers { get; set; } = null!;
         public DbSet<TemplateCategory> TemplateCategories { get; set; } = null!;
         public DbSet<ScoringTemplate> ScoringTemplates { get; set; } = null!;
         public DbSet<ScoringTemplateQuestion> ScoringTemplateQuestions { get; set; } = null!;
         public DbSet<ScoringTemplateAnswerOption> ScoringTemplateAnswerOptions { get; set; } = null!;
+
+        // --- DBSETS FASE 1 — CATÁLOGOS NUEVOS ---
+        public DbSet<LeadLostReason> LeadLostReasons { get; set; } = null!;
+        public DbSet<AccountLeadLostReason> AccountLeadLostReasons { get; set; } = null!;
+        public DbSet<AccountIndustry> AccountIndustries { get; set; } = null!;
 
         // --- DBSETS PARA CAMPOS PERSONALIZADOS ---
         public DbSet<CustomFieldDefinition> CustomFieldDefinitions { get; set; } = null!;
@@ -116,6 +123,9 @@ namespace ProfetAPI.Data
             builder.Entity<DealItem>().HasKey(di => new { di.DealId, di.ItemId });
             builder.Entity<SharedWidget>().HasKey(sw => new { sw.ShareLinkId, sw.WidgetId });
             builder.Entity<Tagging>().HasKey(t => new { t.TagId, t.EntityId, t.EntityType });
+            builder.Entity<AccountLeadLostReason>().HasKey(a => new { a.AccountId, a.LostReasonId });
+            builder.Entity<SubscriptionFeatureOverride>().HasKey(s => new { s.SubscriptionId, s.FeatureId });
+            builder.Entity<SubscriptionFeatureOverride>().ToTable("SubscriptionFeatureOverrides");
 
             // Relaciones Específicas
             builder.Entity<ApplicationUser>(b => {
@@ -155,6 +165,12 @@ namespace ProfetAPI.Data
             builder.Entity<Company>().ToTable("Companies");
             builder.Entity<Contact>().ToTable("Contacts");
             builder.Entity<Deal>().ToTable("Deals");
+
+            // Fase 1 — Catálogos
+            builder.Entity<LeadLostReason>().ToTable("LeadLostReasons");
+            builder.Entity<AccountLeadLostReason>().ToTable("AccountLeadLostReasons");
+            builder.Entity<AccountIndustry>().ToTable("AccountIndustries");
+            builder.Entity<ScoringRuleCondition>().ToTable("ScoringRuleConditions");
         }
     }
 }

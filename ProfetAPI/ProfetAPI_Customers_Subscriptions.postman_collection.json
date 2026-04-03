@@ -1,0 +1,187 @@
+{
+  "info": {
+    "name": "ProfetAPI — Customers & Subscriptions",
+    "description": "Gestión de clientes con suscripción personalizada: plan, precio negociado, feature overrides y AddOns.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",     "value": "http://localhost:5051", "type": "string" },
+    { "key": "token",       "value": "PEGA_TU_JWT_AQUI",      "type": "string" },
+    { "key": "customerId",  "value": "1",                     "type": "string" },
+    { "key": "planId",      "value": "1",                     "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+
+    {
+      "name": "📋 Planes — Preview",
+      "item": [
+        {
+          "name": "GET Catálogo de planes",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/plans"
+          }
+        },
+        {
+          "name": "GET Preview del plan (precio + features + addons)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/plans/{{planId}}/preview"
+          },
+          "description": "Usar ANTES de crear un customer. Muestra el precio vigente, los límites base de cada feature y los AddOns disponibles para negociar."
+        }
+      ]
+    },
+
+    {
+      "name": "🏢 Customers",
+      "item": [
+        {
+          "name": "GET Listar clientes",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/customers"
+          }
+        },
+        {
+          "name": "GET Cliente por ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/customers/{{customerId}}"
+          }
+        },
+        {
+          "name": "POST Crear cliente (con suscripción completa)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Empresa Demo S.A. de C.V.\",\n  \"contact\": \"Juan Pérez\",\n  \"email\": \"juan@empresademo.com\",\n  \"phone\": \"5512345678\",\n  \"subscription\": {\n    \"planId\": 1,\n    \"billingCycle\": \"Monthly\",\n    \"priceAgreed\": null,\n    \"discountAmount\": 0,\n    \"status\": \"Active\",\n    \"trialEndDate\": null,\n    \"featureOverrides\": [\n      {\n        \"featureId\": 1,\n        \"customLimit\": \"1000\"\n      }\n    ],\n    \"addOns\": [\n      {\n        \"addOnId\": 1,\n        \"quantity\": 1,\n        \"pricePaid\": null\n      }\n    ]\n  }\n}"
+            }
+          },
+          "description": "Crea Customer + Subscription + FeatureOverrides + AddOns en una transacción.\n- priceAgreed: null = usa el precio vigente del plan\n- featureOverrides: solo los features que difieren del plan base\n- addOns.pricePaid: null = usa el precio base del AddOn"
+        },
+        {
+          "name": "POST Crear cliente (mínimo, sin overrides ni addons)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Cliente Básico S.A.\",\n  \"contact\": \"María García\",\n  \"email\": \"maria@clientebasico.com\",\n  \"phone\": null,\n  \"subscription\": {\n    \"planId\": 1,\n    \"billingCycle\": \"Monthly\",\n    \"status\": \"Active\",\n    \"featureOverrides\": [],\n    \"addOns\": []\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "POST Crear cliente (con periodo de prueba)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Cliente Trial S.A.\",\n  \"contact\": \"Luis Martínez\",\n  \"email\": \"luis@clientetrial.com\",\n  \"phone\": \"5598765432\",\n  \"subscription\": {\n    \"planId\": 1,\n    \"billingCycle\": \"Monthly\",\n    \"priceAgreed\": 0,\n    \"discountAmount\": 0,\n    \"status\": \"Trialing\",\n    \"trialEndDate\": \"2026-05-02T00:00:00Z\",\n    \"featureOverrides\": [],\n    \"addOns\": []\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar datos básicos del cliente",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers/{{customerId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Empresa Demo Actualizada\",\n  \"contact\": \"Juan Pérez López\",\n  \"phone\": \"5599887766\"\n}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "💳 Suscripciones",
+      "item": [
+        {
+          "name": "GET Ver suscripción activa del cliente",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/subscription"
+          },
+          "description": "Devuelve plan, precio acordado, features con límite efectivo (override si existe, base del plan si no) y AddOns contratados."
+        },
+        {
+          "name": "PUT Cambiar precio y descuento",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/subscription",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"priceAgreed\": 1800.00,\n  \"discountAmount\": 200.00\n}"
+            }
+          },
+          "description": "Solo actualiza precio y descuento. Omitir featureOverrides y addOns para no modificarlos."
+        },
+        {
+          "name": "PUT Cambiar plan",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/subscription",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planId\": 2,\n  \"priceAgreed\": 2500.00,\n  \"billingCycle\": \"Annually\"\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar feature overrides",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/subscription",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"featureOverrides\": [\n    { \"featureId\": 1, \"customLimit\": \"2000\" },\n    { \"featureId\": 2, \"customLimit\": \"50\" }\n  ]\n}"
+            }
+          },
+          "description": "REEMPLAZA todos los overrides actuales con los enviados. Enviar lista vacía [] para eliminar todos los overrides."
+        },
+        {
+          "name": "PUT Actualizar AddOns contratados",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/subscription",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"addOns\": [\n    { \"addOnId\": 1, \"quantity\": 2, \"pricePaid\": 150.00 },\n    { \"addOnId\": 3, \"quantity\": 1, \"pricePaid\": null }\n  ]\n}"
+            }
+          },
+          "description": "REEMPLAZA todos los AddOns actuales. pricePaid: null = usa el precio base del AddOn."
+        },
+        {
+          "name": "PUT Cancelar suscripción",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customers/{{customerId}}/subscription",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Canceled\"\n}"
+            }
+          }
+        }
+      ]
+    }
+
+  ]
+}

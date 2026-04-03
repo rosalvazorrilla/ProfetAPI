@@ -33,5 +33,6 @@ namespace ProfetAPI.Models
         public virtual Plan Plan { get; set; }
         public virtual ICollection<SubscriptionPeriod> Periods { get; set; } = new List<SubscriptionPeriod>();
         public virtual ICollection<CustomerPurchasedAddOn> PurchasedAddOns { get; set; } = new List<CustomerPurchasedAddOn>();
+        public virtual ICollection<SubscriptionFeatureOverride> FeatureOverrides { get; set; } = new List<SubscriptionFeatureOverride>();
     }
 }

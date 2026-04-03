@@ -1,0 +1,335 @@
+{
+  "info": {
+    "name": "ProfetAPI — Fase 1 Admin Global",
+    "description": "Catálogos del Admin Global: Industrias, Plantillas de Embudos, Variables, Fuentes, Motivos de Pérdida y Scoring.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5051", "type": "string" },
+    { "key": "token",   "value": "PEGA_TU_JWT_AQUI",      "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+
+    {
+      "name": "🔐 Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@profet.com\",\n  \"password\": \"TuPassword123!\"\n}"
+            }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "🏭 Industrias",
+      "item": [
+        {
+          "name": "GET Listar industrias",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/industries" }
+        },
+        {
+          "name": "GET Industria por ID",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/industries/1" }
+        },
+        {
+          "name": "POST Crear industria",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/industries",
+            "body": { "mode": "raw", "raw": "{\n  \"nameES\": \"Automotriz\",\n  \"nameEN\": \"Automotive\"\n}" }
+          }
+        },
+        {
+          "name": "PUT Actualizar industria",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/industries/1",
+            "body": { "mode": "raw", "raw": "{\n  \"nameES\": \"Automotriz\",\n  \"nameEN\": \"Automotive\"\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar industria",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/industries/1" }
+        }
+      ]
+    },
+
+    {
+      "name": "🔀 Plantillas de Embudos",
+      "item": [
+        {
+          "name": "GET Listar plantillas",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/funneltemplates" }
+        },
+        {
+          "name": "GET Plantilla por ID",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/funneltemplates/1" }
+        },
+        {
+          "name": "POST Crear plantilla con etapas",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/funneltemplates",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Pipeline B2B Estándar\",\n  \"description\": \"Embudo genérico para ventas B2B\",\n  \"stages\": [\n    { \"stageName\": \"Prospecto\",       \"order\": 1 },\n    { \"stageName\": \"Primer Contacto\",  \"order\": 2 },\n    { \"stageName\": \"Documentación\",   \"order\": 3 },\n    { \"stageName\": \"Cotización\",       \"order\": 4 }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar plantilla",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/funneltemplates/1",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Pipeline B2B Estándar v2\",\n  \"description\": \"Versión actualizada\"\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar plantilla",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/funneltemplates/1" }
+        },
+        {
+          "name": "POST Agregar etapa a plantilla",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/funneltemplates/1/stages",
+            "body": { "mode": "raw", "raw": "{\n  \"stageName\": \"Cierre\",\n  \"order\": 5\n}" }
+          }
+        },
+        {
+          "name": "PUT Actualizar etapa",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/funneltemplates/stages/1",
+            "body": { "mode": "raw", "raw": "{\n  \"stageName\": \"Cierre Ganado\",\n  \"order\": 5\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar etapa",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/funneltemplates/stages/1" }
+        }
+      ]
+    },
+
+    {
+      "name": "📋 Variables (CustomFieldDefinitions)",
+      "item": [
+        {
+          "name": "GET Listar variables",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/customfielddefinitions" }
+        },
+        {
+          "name": "GET Variable por ID",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/customfielddefinitions/1" }
+        },
+        {
+          "name": "POST Crear variable",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customfielddefinitions",
+            "body": { "mode": "raw", "raw": "{\n  \"fieldCode\": \"nse\",\n  \"fieldName\": \"NSE\",\n  \"fieldType\": \"Text\"\n}" }
+          }
+        },
+        {
+          "name": "PUT Actualizar variable",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/customfielddefinitions/1",
+            "body": { "mode": "raw", "raw": "{\n  \"fieldName\": \"Nivel Socioeconómico\",\n  \"fieldType\": \"Select\"\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar variable",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/customfielddefinitions/1" }
+        }
+      ]
+    },
+
+    {
+      "name": "📡 Fuentes de Prospectos",
+      "item": [
+        {
+          "name": "GET Listar fuentes",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/prospectsources" }
+        },
+        {
+          "name": "GET Fuente por ID",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/prospectsources/1" }
+        },
+        {
+          "name": "POST Crear fuente",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/prospectsources",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Facebook Ads\"\n}" }
+          }
+        },
+        {
+          "name": "PUT Actualizar fuente",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/prospectsources/1",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Meta Ads\"\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar fuente",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/prospectsources/1" }
+        }
+      ]
+    },
+
+    {
+      "name": "❌ Motivos de Pérdida",
+      "item": [
+        {
+          "name": "GET Listar motivos (todos)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/leadlostreasons" }
+        },
+        {
+          "name": "GET Listar motivos (solo activos)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/leadlostreasons?soloActivos=true" }
+        },
+        {
+          "name": "GET Motivo por ID",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/leadlostreasons/1" }
+        },
+        {
+          "name": "POST Crear motivo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/leadlostreasons",
+            "body": { "mode": "raw", "raw": "{\n  \"description\": \"Fuera de presupuesto\",\n  \"conversionRate\": true\n}" }
+          }
+        },
+        {
+          "name": "PUT Actualizar motivo",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/leadlostreasons/1",
+            "body": { "mode": "raw", "raw": "{\n  \"description\": \"Fuera de presupuesto\",\n  \"conversionRate\": true,\n  \"isActive\": true\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar motivo",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/leadlostreasons/1" }
+        }
+      ]
+    },
+
+    {
+      "name": "⭐ Plantillas de Scoring",
+      "item": [
+        {
+          "name": "GET Listar templates",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/scoringtemplates" }
+        },
+        {
+          "name": "GET Templates por industria",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/scoringtemplates?industryId=1" }
+        },
+        {
+          "name": "GET Template por ID",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/scoringtemplates/1" }
+        },
+        {
+          "name": "POST Crear template completo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/scoringtemplates",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Calificación B2B General\",\n  \"description\": \"Template base para ventas B2B\",\n  \"industryId\": null,\n  \"categoryId\": null,\n  \"questions\": [\n    {\n      \"questionText\": \"¿Cuenta con presupuesto definido?\",\n      \"questionType\": \"SingleChoice\",\n      \"isRequired\": true,\n      \"orderPosition\": 1,\n      \"answerOptions\": [\n        { \"answerText\": \"Sí, tiene presupuesto definido\",    \"points\": 30, \"orderPosition\": 1 },\n        { \"answerText\": \"Sí, pero es flexible\",              \"points\": 20, \"orderPosition\": 2 },\n        { \"answerText\": \"En proceso de aprobación\",          \"points\": 10, \"orderPosition\": 3 },\n        { \"answerText\": \"No tiene presupuesto\",              \"points\": 0,  \"orderPosition\": 4 }\n      ]\n    },\n    {\n      \"questionText\": \"Tiempo estimado de compra\",\n      \"questionType\": \"SingleChoice\",\n      \"isRequired\": true,\n      \"orderPosition\": 2,\n      \"answerOptions\": [\n        { \"answerText\": \"Menos de 1 mes\",  \"points\": 25, \"orderPosition\": 1 },\n        { \"answerText\": \"1 a 3 meses\",     \"points\": 18, \"orderPosition\": 2 },\n        { \"answerText\": \"3 a 6 meses\",     \"points\": 10, \"orderPosition\": 3 },\n        { \"answerText\": \"Más de 6 meses\",  \"points\": 3,  \"orderPosition\": 4 }\n      ]\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar template",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/scoringtemplates/1",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Calificación B2B General v2\",\n  \"description\": \"Versión actualizada\",\n  \"industryId\": null,\n  \"categoryId\": null\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar template",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/scoringtemplates/1" }
+        },
+        {
+          "name": "POST Agregar pregunta al template",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/scoringtemplates/1/questions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"questionText\": \"Posición del contacto en la empresa\",\n  \"questionType\": \"SingleChoice\",\n  \"isRequired\": false,\n  \"orderPosition\": 3,\n  \"answerOptions\": [\n    { \"answerText\": \"Director / Dueño\",    \"points\": 20, \"orderPosition\": 1 },\n    { \"answerText\": \"Gerente\",              \"points\": 15, \"orderPosition\": 2 },\n    { \"answerText\": \"Supervisor\",           \"points\": 8,  \"orderPosition\": 3 },\n    { \"answerText\": \"Empleado operativo\",   \"points\": 3,  \"orderPosition\": 4 }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "PUT Actualizar pregunta",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/scoringtemplates/questions/1",
+            "body": { "mode": "raw", "raw": "{\n  \"questionText\": \"¿Tiene presupuesto aprobado?\",\n  \"questionType\": \"SingleChoice\",\n  \"isRequired\": true,\n  \"orderPosition\": 1\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar pregunta",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/scoringtemplates/questions/1" }
+        },
+        {
+          "name": "POST Agregar respuesta a pregunta",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/scoringtemplates/questions/1/answers",
+            "body": { "mode": "raw", "raw": "{\n  \"answerText\": \"Ya tiene orden de compra emitida\",\n  \"points\": 35,\n  \"orderPosition\": 0\n}" }
+          }
+        },
+        {
+          "name": "PUT Actualizar respuesta",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/scoringtemplates/answers/1",
+            "body": { "mode": "raw", "raw": "{\n  \"answerText\": \"Sí, presupuesto definido y aprobado\",\n  \"points\": 30,\n  \"orderPosition\": 1\n}" }
+          }
+        },
+        {
+          "name": "DELETE Eliminar respuesta",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/scoringtemplates/answers/1" }
+        }
+      ]
+    }
+
+  ]
+}
