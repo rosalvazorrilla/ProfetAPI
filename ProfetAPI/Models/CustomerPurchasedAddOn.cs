@@ -13,6 +13,7 @@ namespace ProfetAPI.Models
         [Column(TypeName = "decimal(18, 2)")]
         public decimal PricePaid { get; set; }
 
+        public int Quantity { get; set; }
         public DateTime PurchaseDate { get; set; }
         public DateTime? ExpiryDate { get; set; }
 

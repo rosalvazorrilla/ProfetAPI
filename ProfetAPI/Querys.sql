@@ -1550,3 +1550,9 @@ GO
 -- ============================================================
 -- FIN SUSCRIPCIONES — OVERRIDES
 -- ============================================================
+
+-- ============================================================
+-- CustomerPurchasedAddOns — agregar Quantity
+-- ============================================================
+ALTER TABLE CustomerPurchasedAddOns ADD Quantity INT NOT NULL DEFAULT 1;
+GO
