@@ -33,21 +33,22 @@ namespace ProfetAPI.Controllers
                 .Include(p => p.PlanFeatures).ThenInclude(pf => pf.Feature)
                 .Include(p => p.PlanPriceHistories)
                 .Where(p => p.IsActive)
-                .Select(p => new PlanCatalogDto(
-                    p.PlanId,
-                    p.Name,
-                    p.Description,
-                    p.PlanPriceHistories.OrderByDescending(ph => ph.EffectiveDate).Select(ph => ph.MonthlyPrice).FirstOrDefault(),
-                    p.PlanPriceHistories.OrderByDescending(ph => ph.EffectiveDate).Select(ph => ph.AnnualPrice).FirstOrDefault(),
-                    p.PlanFeatures.Select(pf => new PlanFeatureDto(
-                        pf.Feature.FeatureCode,
-                        pf.Feature.Name,
-                        pf.Limit
-                    )).ToList()
-                ))
                 .ToListAsync();
 
-            return Ok(plans);
+            var result = plans.Select(p => new PlanCatalogDto(
+                p.PlanId,
+                p.Name,
+                p.Description,
+                p.PlanPriceHistories.OrderByDescending(ph => ph.EffectiveDate).Select(ph => ph.MonthlyPrice).FirstOrDefault(),
+                p.PlanPriceHistories.OrderByDescending(ph => ph.EffectiveDate).Select(ph => ph.AnnualPrice).FirstOrDefault(),
+                p.PlanFeatures.Select(pf => new PlanFeatureDto(
+                    pf.Feature.FeatureCode,
+                    pf.Feature.Name,
+                    pf.Limit
+                )).ToList()
+            )).ToList();
+
+            return Ok(result);
         }
 
         [HttpPost]
@@ -86,23 +87,77 @@ namespace ProfetAPI.Controllers
             }
         }
 
-        [HttpPost("{id}/prices")]
-        [SwaggerOperation(Summary = "Actualizar Precios del Plan", Description = "Añade una nueva entrada al historial de precios.")]
-        public async Task<IActionResult> UpdatePrice(int id, [FromBody] UpdatePlanPriceDto model)
+        [HttpPut("{id}")]
+        [SwaggerOperation(Summary = "Actualizar Plan", Description = "Modifica nombre y descripción del plan. Los precios se actualizan via POST /{id}/prices.")]
+        [SwaggerResponse(200, "Plan actualizado")]
+        [SwaggerResponse(404, "Plan no encontrado")]
+        public async Task<IActionResult> UpdatePlan(int id, [FromBody] UpdatePlanDto model)
+        {
+            var plan = await _context.Plans.FindAsync(id);
+            if (plan == null) return NotFound(new { message = "Plan no encontrado." });
+
+            plan.Name = model.Name;
+            plan.Description = model.Description;
+            plan.IsPublic = model.IsPublic;
+            await _context.SaveChangesAsync();
+            return Ok(new { plan.PlanId, plan.Name, plan.Description, plan.IsPublic, plan.IsActive });
+        }
+
+        [HttpDelete("{id}")]
+        [SwaggerOperation(Summary = "Desactivar Plan", Description = "Marca el plan como inactivo (soft delete). No afecta suscripciones existentes.")]
+        [SwaggerResponse(200, "Plan desactivado")]
+        [SwaggerResponse(404, "Plan no encontrado")]
+        public async Task<IActionResult> DeactivatePlan(int id)
+        {
+            var plan = await _context.Plans.FindAsync(id);
+            if (plan == null) return NotFound(new { message = "Plan no encontrado." });
+
+            plan.IsActive = false;
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Plan desactivado." });
+        }
+
+        [HttpGet("{id}/prices")]
+        [SwaggerOperation(Summary = "Historial de precios del plan", Description = "Devuelve todos los precios del plan ordenados por fecha efectiva descendente.")]
+        [SwaggerResponse(200, "Historial de precios", typeof(List<PlanPriceResponseDto>))]
+        [SwaggerResponse(404, "Plan no encontrado")]
+        public async Task<IActionResult> GetPriceHistory(int id)
         {
             var planExists = await _context.Plans.AnyAsync(p => p.PlanId == id);
-            if (!planExists) return NotFound(new { message = "Plan no encontrado" });
+            if (!planExists) return NotFound(new { message = "Plan no encontrado." });
 
-            var newPrice = new PlanPriceHistory {
+            var prices = await _context.PlanPriceHistories
+                .Where(p => p.PlanId == id)
+                .OrderByDescending(p => p.EffectiveDate)
+                .Select(p => new PlanPriceResponseDto(p.PriceHistoryId, p.MonthlyPrice, p.AnnualPrice, p.EffectiveDate, p.CreatedAt))
+                .ToListAsync();
+
+            return Ok(prices);
+        }
+
+        [HttpPost("{id}/prices")]
+        [SwaggerOperation(Summary = "Agregar precio al historial", Description = "Inserta un nuevo precio vigente. GET /api/plans devolverá este precio como el actual.")]
+        [SwaggerResponse(201, "Precio agregado", typeof(PlanPriceResponseDto))]
+        [SwaggerResponse(404, "Plan no encontrado")]
+        public async Task<IActionResult> AddPrice(int id, [FromBody] AddPlanPriceDto model)
+        {
+            var planExists = await _context.Plans.AnyAsync(p => p.PlanId == id);
+            if (!planExists) return NotFound(new { message = "Plan no encontrado." });
+
+            var newPrice = new PlanPriceHistory
+            {
                 PlanId = id,
                 MonthlyPrice = model.MonthlyPrice,
                 AnnualPrice = model.AnnualPrice,
-                EffectiveDate = DateTime.UtcNow
+                EffectiveDate = model.EffectiveDate ?? DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow
             };
 
             _context.PlanPriceHistories.Add(newPrice);
             await _context.SaveChangesAsync();
-            return Ok(new { message = "Historial de precios actualizado" });
+
+            return CreatedAtAction(nameof(GetPriceHistory), new { id },
+                new PlanPriceResponseDto(newPrice.PriceHistoryId, newPrice.MonthlyPrice, newPrice.AnnualPrice, newPrice.EffectiveDate, newPrice.CreatedAt));
         }
 
         #endregion
@@ -186,6 +241,21 @@ namespace ProfetAPI.Controllers
             return Ok(feature);
         }
 
+        [HttpPut("features/{featureId}")]
+        [SwaggerOperation(Summary = "Actualizar Feature", Description = "Modifica nombre y descripción de una feature global.")]
+        [SwaggerResponse(200, "Feature actualizada")]
+        [SwaggerResponse(404, "Feature no encontrada")]
+        public async Task<IActionResult> UpdateFeature(int featureId, [FromBody] UpdateFeatureDto model)
+        {
+            var feature = await _context.Features.FindAsync(featureId);
+            if (feature == null) return NotFound(new { message = "Feature no encontrada." });
+
+            feature.Name = model.Name;
+            feature.Description = model.Description;
+            await _context.SaveChangesAsync();
+            return Ok(feature);
+        }
+
         [HttpPost("{planId}/features")]
         [SwaggerOperation(Summary = "Configurar Límite en Plan", Description = "Asigna o actualiza el límite de una Feature para un Plan específico.")]
         public async Task<IActionResult> SetPlanFeature(int planId, [FromBody] SetPlanFeatureDto model)
@@ -239,6 +309,41 @@ namespace ProfetAPI.Controllers
             _context.AddOns.Add(addon);
             await _context.SaveChangesAsync();
             return Ok(addon);
+        }
+
+        [HttpPut("addons/{addonId}")]
+        [SwaggerOperation(Summary = "Actualizar AddOn", Description = "Modifica nombre, descripción, precio y ciclo de facturación del addon.")]
+        [SwaggerResponse(200, "AddOn actualizado")]
+        [SwaggerResponse(404, "AddOn no encontrado")]
+        public async Task<IActionResult> UpdateAddOn(int addonId, [FromBody] UpdateAddOnDto model)
+        {
+            var addon = await _context.AddOns.FindAsync(addonId);
+            if (addon == null) return NotFound(new { message = "AddOn no encontrado." });
+
+            addon.Name = model.Name;
+            addon.Description = model.Description;
+            addon.Price = model.Price;
+            addon.BillingCycle = model.BillingCycle;
+            await _context.SaveChangesAsync();
+            return Ok(addon);
+        }
+
+        [HttpDelete("addons/{addonId}")]
+        [SwaggerOperation(Summary = "Eliminar AddOn", Description = "Elimina el addon del catálogo. Solo si no tiene instancias contratadas.")]
+        [SwaggerResponse(204, "AddOn eliminado")]
+        [SwaggerResponse(400, "El addon tiene instancias contratadas activas")]
+        [SwaggerResponse(404, "AddOn no encontrado")]
+        public async Task<IActionResult> DeleteAddOn(int addonId)
+        {
+            var addon = await _context.AddOns.Include(a => a.PurchasedInstances).FirstOrDefaultAsync(a => a.AddOnId == addonId);
+            if (addon == null) return NotFound(new { message = "AddOn no encontrado." });
+
+            if (addon.PurchasedInstances.Any())
+                return BadRequest(new { message = "No se puede eliminar un addon con instancias contratadas activas." });
+
+            _context.AddOns.Remove(addon);
+            await _context.SaveChangesAsync();
+            return NoContent();
         }
 
         #endregion

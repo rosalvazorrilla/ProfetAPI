@@ -184,6 +184,27 @@ namespace ProfetAPI.Controllers
             }
         }
 
+        // ── DELETE api/customers/5 ──────────────────────────────────────────
+
+        [HttpDelete("{id}")]
+        [SwaggerOperation(
+            Summary = "Eliminar cliente (soft delete)",
+            Description = "Marca el cliente como eliminado. No borra físicamente el registro ni cancela la suscripción."
+        )]
+        [SwaggerResponse(200, "Cliente eliminado")]
+        [SwaggerResponse(404, "No encontrado")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
+            if (customer == null)
+                return NotFound(new { message = "El cliente no existe o ya fue eliminado." });
+
+            customer.Deleted = true;
+            customer.Active = false;
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Cliente eliminado correctamente." });
+        }
+
         // ── PUT api/customers/5 ──────────────────────────────────────────────
 
         [HttpPut("{id}")]

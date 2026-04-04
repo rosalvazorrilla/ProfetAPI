@@ -1556,3 +1556,21 @@ GO
 -- ============================================================
 ALTER TABLE CustomerPurchasedAddOns ADD Quantity INT NOT NULL DEFAULT 1;
 GO
+
+-- ============================================================
+-- LeadLostReasons — agregar IsActive (si la tabla fue creada sin esta columna)
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('LeadLostReasons') AND name = 'IsActive')
+BEGIN
+    ALTER TABLE LeadLostReasons ADD IsActive BIT NOT NULL DEFAULT 1;
+END
+GO
+
+-- ============================================================
+-- PlanPriceHistory — agregar CreatedAt
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('PlanPriceHistory') AND name = 'CreatedAt')
+BEGIN
+    ALTER TABLE PlanPriceHistory ADD CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE();
+END
+GO

@@ -18,6 +18,7 @@ namespace ProfetAPI.Models
 
         public DateTime EffectiveDate { get; set; }
         public DateTime? EndDate { get; set; }
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         // Propiedad de navegación
         public virtual Plan Plan { get; set; } = null!;

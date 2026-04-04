@@ -3,14 +3,18 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ProfetAPI.Models;
 
+[Table("FunnelTemplateStages")]
 public class FunnelTemplateStage
 {
     [Key]
     public int TemplateStageId { get; set; }
+
+    [ForeignKey("FunnelTemplate")]
     public int TemplateId { get; set; }
+
     public string StageName { get; set; } = null!;
-    
-    [Column("\"Order\"")] // El uso de "Order" como nombre de columna puede requerir comillas
+
+    [Column("Order")]
     public int Order { get; set; }
 
     // Propiedad de navegación

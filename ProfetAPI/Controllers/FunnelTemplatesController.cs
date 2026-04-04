@@ -23,20 +23,23 @@ public class FunnelTemplatesController : ControllerBase
     [SwaggerResponse(200, "Lista de plantillas", typeof(List<FunnelTemplateResponseDto>))]
     public async Task<IActionResult> GetAll()
     {
-        var list = await _context.FunnelTemplates
+        var templates = await _context.FunnelTemplates
             .Include(t => t.Stages)
-            .Select(t => new FunnelTemplateResponseDto
+            .ToListAsync();
+
+        var list = templates.Select(t => new FunnelTemplateResponseDto
+        {
+            TemplateId = t.TemplateId,
+            Name = t.Name,
+            Description = t.Description,
+            Stages = t.Stages.OrderBy(s => s.Order).Select(s => new FunnelTemplateStageResponseDto
             {
-                TemplateId = t.TemplateId,
-                Name = t.Name,
-                Description = t.Description,
-                Stages = t.Stages.OrderBy(s => s.Order).Select(s => new FunnelTemplateStageResponseDto
-                {
-                    TemplateStageId = s.TemplateStageId,
-                    StageName = s.StageName,
-                    Order = s.Order
-                }).ToList()
-            }).ToListAsync();
+                TemplateStageId = s.TemplateStageId,
+                StageName = s.StageName,
+                Order = s.Order
+            }).ToList()
+        }).ToList();
+
         return Ok(list);
     }
 

@@ -1,7 +1,9 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ProfetAPI.Models;
 
+[Table("FunnelTemplates")]
 public class FunnelTemplate
 {
     [Key]

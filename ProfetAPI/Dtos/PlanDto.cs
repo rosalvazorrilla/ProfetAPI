@@ -59,4 +59,36 @@ namespace ProfetAPI.Dtos
         [Required] string BillingCycle,
         [Required] int FeatureId
     );
+
+    public record UpdatePlanDto(
+        [Required] string Name,
+        string? Description,
+        bool IsPublic
+    );
+
+    public record UpdateFeatureDto(
+        [Required] string Name,
+        string? Description
+    );
+
+    public record UpdateAddOnDto(
+        [Required] string Name,
+        string? Description,
+        [Required] decimal Price,
+        [Required] string BillingCycle
+    );
+
+    public record AddPlanPriceDto(
+        [Required] decimal MonthlyPrice,
+        [Required] decimal AnnualPrice,
+        DateTime? EffectiveDate
+    );
+
+    public record PlanPriceResponseDto(
+        int PriceId,
+        decimal MonthlyPrice,
+        decimal AnnualPrice,
+        DateTime EffectiveDate,
+        DateTime CreatedAt
+    );
 }
