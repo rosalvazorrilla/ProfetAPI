@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace ProfetAPI.Models
 {
+    [Table("PlanPriceHistory")]
     public class PlanPriceHistory
     {
         [Key]

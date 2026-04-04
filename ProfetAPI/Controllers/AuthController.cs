@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Identity;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 using ProfetAPI.Dtos;
@@ -86,6 +87,19 @@ namespace ProfetAPI.Controllers
             }
 
             return Unauthorized(new { message = "Usuario o contraseña incorrectos" });
+        }
+
+        [HttpPost("logout")]
+        [Authorize]
+        [SwaggerOperation(
+            Summary = "Cerrar Sesión",
+            Description = "Endpoint de logout. El frontend debe eliminar el token JWT de su storage al recibir la respuesta. El token permanece técnicamente válido hasta su expiración (8h) ya que es stateless."
+        )]
+        [SwaggerResponse(200, "Sesión cerrada correctamente")]
+        [SwaggerResponse(401, "Token inválido o expirado")]
+        public IActionResult Logout()
+        {
+            return Ok(new { message = "Sesión cerrada correctamente." });
         }
     }
 }
