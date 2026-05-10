@@ -29,13 +29,13 @@ public class FunnelTemplatesController : ControllerBase
 
         var list = templates.Select(t => new FunnelTemplateResponseDto
         {
-            TemplateId = t.TemplateId,
+            Id = t.TemplateId,
             Name = t.Name,
             Description = t.Description,
             Stages = t.Stages.OrderBy(s => s.Order).Select(s => new FunnelTemplateStageResponseDto
             {
-                TemplateStageId = s.TemplateStageId,
-                StageName = s.StageName,
+                Id = s.TemplateStageId,
+                Name = s.StageName,
                 Order = s.Order
             }).ToList()
         }).ToList();
@@ -55,9 +55,9 @@ public class FunnelTemplatesController : ControllerBase
 
         return Ok(new FunnelTemplateResponseDto
         {
-            TemplateId = t.TemplateId, Name = t.Name, Description = t.Description,
+            Id = t.TemplateId, Name = t.Name, Description = t.Description,
             Stages = t.Stages.OrderBy(s => s.Order).Select(s => new FunnelTemplateStageResponseDto
-            { TemplateStageId = s.TemplateStageId, StageName = s.StageName, Order = s.Order }).ToList()
+            { Id = s.TemplateStageId, Name = s.StageName, Order = s.Order }).ToList()
         });
     }
 
@@ -82,9 +82,9 @@ public class FunnelTemplatesController : ControllerBase
 
         return CreatedAtAction(nameof(GetById), new { id = template.TemplateId }, new FunnelTemplateResponseDto
         {
-            TemplateId = template.TemplateId, Name = template.Name, Description = template.Description,
+            Id = template.TemplateId, Name = template.Name, Description = template.Description,
             Stages = template.Stages.Select(s => new FunnelTemplateStageResponseDto
-            { TemplateStageId = s.TemplateStageId, StageName = s.StageName, Order = s.Order }).ToList()
+            { Id = s.TemplateStageId, Name = s.StageName, Order = s.Order }).ToList()
         });
     }
 
@@ -104,9 +104,9 @@ public class FunnelTemplatesController : ControllerBase
 
         return Ok(new FunnelTemplateResponseDto
         {
-            TemplateId = template.TemplateId, Name = template.Name, Description = template.Description,
+            Id = template.TemplateId, Name = template.Name, Description = template.Description,
             Stages = template.Stages.OrderBy(s => s.Order).Select(s => new FunnelTemplateStageResponseDto
-            { TemplateStageId = s.TemplateStageId, StageName = s.StageName, Order = s.Order }).ToList()
+            { Id = s.TemplateStageId, Name = s.StageName, Order = s.Order }).ToList()
         });
     }
 
@@ -140,7 +140,7 @@ public class FunnelTemplatesController : ControllerBase
         await _context.SaveChangesAsync();
 
         return CreatedAtAction(nameof(GetById), new { id = templateId },
-            new FunnelTemplateStageResponseDto { TemplateStageId = stage.TemplateStageId, StageName = stage.StageName, Order = stage.Order });
+            new FunnelTemplateStageResponseDto { Id = stage.TemplateStageId, Name = stage.StageName, Order = stage.Order });
     }
 
     // PUT: api/funneltemplates/stages/3
@@ -157,7 +157,29 @@ public class FunnelTemplatesController : ControllerBase
         stage.Order = model.Order;
         await _context.SaveChangesAsync();
 
-        return Ok(new FunnelTemplateStageResponseDto { TemplateStageId = stage.TemplateStageId, StageName = stage.StageName, Order = stage.Order });
+        return Ok(new FunnelTemplateStageResponseDto { Id = stage.TemplateStageId, Name = stage.StageName, Order = stage.Order });
+    }
+
+    // PUT: api/funneltemplates/5/stages/reorder
+    [HttpPut("{templateId:int}/stages/reorder")]
+    [SwaggerOperation(Summary = "Reordenar etapas de una plantilla", Description = "Actualiza el orden de todas las etapas en una sola operación.")]
+    [SwaggerResponse(204, "Reordenadas")]
+    [SwaggerResponse(404, "Plantilla no encontrada")]
+    public async Task<IActionResult> ReorderStages(int templateId, [FromBody] List<ReorderStageDto> model)
+    {
+        var stageIds = model.Select(m => m.StageId).ToList();
+        var stages = await _context.FunnelTemplateStages
+            .Where(s => s.TemplateId == templateId && stageIds.Contains(s.TemplateStageId))
+            .ToListAsync();
+
+        foreach (var item in model)
+        {
+            var stage = stages.FirstOrDefault(s => s.TemplateStageId == item.StageId);
+            if (stage != null) stage.Order = item.Order;
+        }
+
+        await _context.SaveChangesAsync();
+        return NoContent();
     }
 
     // DELETE: api/funneltemplates/stages/3

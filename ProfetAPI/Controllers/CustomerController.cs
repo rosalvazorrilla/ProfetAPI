@@ -36,7 +36,8 @@ namespace ProfetAPI.Controllers
                 .Where(c => c.Deleted == false)
                 .Select(c => new CustomerResponseDto(
                     c.Id, c.Name, c.Contact, c.Email, c.Status,
-                    $"{_frontendBaseUrl}/setup?token={c.SetupToken}"
+                    $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
+                    c.SetupToken
                 ))
                 .ToListAsync();
 
@@ -55,7 +56,8 @@ namespace ProfetAPI.Controllers
                 .Where(c => c.Id == id && c.Deleted == false)
                 .Select(c => new CustomerResponseDto(
                     c.Id, c.Name, c.Contact, c.Email, c.Status,
-                    $"{_frontendBaseUrl}/setup?token={c.SetupToken}"
+                    $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
+                    c.SetupToken
                 ))
                 .FirstOrDefaultAsync();
 
@@ -175,7 +177,7 @@ namespace ProfetAPI.Controllers
 
                 var setupUrl = $"{_frontendBaseUrl}/setup?token={customer.SetupToken}";
                 return CreatedAtAction(nameof(GetById), new { id = customer.Id },
-                    new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status, setupUrl));
+                    new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status, setupUrl, customer.SetupToken));
             }
             catch (Exception ex)
             {
@@ -229,7 +231,7 @@ namespace ProfetAPI.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status,
-                $"{_frontendBaseUrl}/setup?token={customer.SetupToken}"));
+                $"{_frontendBaseUrl}/setup?token={customer.SetupToken}", customer.SetupToken));
         }
 
         // ── GET api/customers/5/subscription ────────────────────────────────

@@ -82,7 +82,8 @@ namespace ProfetAPI.Controllers
                     Expiration = token.ValidTo,
                     UserId = user.Id,
                     Email = user.Email ?? "",
-                    Role = userRoles.FirstOrDefault() ?? "User"
+                    Role = userRoles.FirstOrDefault() ?? "User",
+                    CustomerId = user.CustomerId ?? 0,
                 });
             }
 

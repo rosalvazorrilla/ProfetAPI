@@ -32,7 +32,8 @@ namespace ProfetAPI.Dtos
         string? Contact,
         string? Email,
         string Status,
-        string SetupUrl
+        string SetupUrl,
+        string? SetupToken = null
     );
 
     public record UpdateCustomerDto(

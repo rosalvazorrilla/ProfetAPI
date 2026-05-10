@@ -14,7 +14,6 @@ public class FunnelTemplateStage
 
     public string StageName { get; set; } = null!;
 
-    [Column("Order")]
     public int Order { get; set; }
 
     // Propiedad de navegación

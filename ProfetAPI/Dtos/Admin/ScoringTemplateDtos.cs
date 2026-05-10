@@ -24,7 +24,7 @@ public class CreateScoringTemplateDto
     public int? CategoryId { get; set; }
 
     [SwaggerSchema("Preguntas del template (se pueden agregar después).")]
-    public List<CreateScoringTemplateQuestionDto> Questions { get; set; } = new();
+    public List<CreateScoringQuestionDto> Questions { get; set; } = new();
 }
 
 public class UpdateScoringTemplateDto
@@ -43,101 +43,114 @@ public class UpdateScoringTemplateDto
     public int? CategoryId { get; set; }
 }
 
-public class ScoringTemplateResponseDto
+// Respuesta ligera para listado (sin preguntas)
+public class ScoringTemplateSummaryDto
 {
-    public int TemplateId { get; set; }
+    public int Id { get; set; }
     public string Name { get; set; } = null!;
     public string? Description { get; set; }
     public long? IndustryId { get; set; }
     public string? IndustryName { get; set; }
     public int? CategoryId { get; set; }
     public string? CategoryName { get; set; }
-    public List<ScoringTemplateQuestionResponseDto> Questions { get; set; } = new();
+    public int QuestionCount { get; set; }
+}
+
+// Respuesta completa para detalle (con preguntas y respuestas)
+public class ScoringTemplateResponseDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = null!;
+    public string? Description { get; set; }
+    public long? IndustryId { get; set; }
+    public string? IndustryName { get; set; }
+    public int? CategoryId { get; set; }
+    public string? CategoryName { get; set; }
+    public List<ScoringQuestionResponseDto> Questions { get; set; } = new();
 }
 
 // ── ScoringTemplateQuestion ─────────────────────────────────────
 
-public class CreateScoringTemplateQuestionDto
+public class CreateScoringQuestionDto
 {
     [Required]
     /// <example>¿Cuenta con presupuesto definido?</example>
     [SwaggerSchema("Texto de la pregunta.", Nullable = false)]
-    public string QuestionText { get; set; } = null!;
+    public string Text { get; set; } = null!;
 
-    /// <example>SingleChoice</example>
+    [SwaggerSchema("Posición en el formulario.")]
+    public int Order { get; set; } = 0;
+
     [SwaggerSchema("Tipo: SingleChoice | MultiChoice | OpenText | Numeric.")]
     public string QuestionType { get; set; } = "SingleChoice";
 
     [SwaggerSchema("¿Es obligatoria esta pregunta?")]
     public bool IsRequired { get; set; } = false;
 
-    [SwaggerSchema("Posición en el formulario.")]
-    public int OrderPosition { get; set; } = 0;
-
-    [SwaggerSchema("Opciones de respuesta (requerido para SingleChoice y MultiChoice).")]
-    public List<CreateScoringTemplateAnswerOptionDto> AnswerOptions { get; set; } = new();
+    [SwaggerSchema("Opciones de respuesta (se pueden agregar después).")]
+    public List<CreateScoringAnswerDto> Answers { get; set; } = new();
 }
 
-public class UpdateScoringTemplateQuestionDto
+public class UpdateScoringQuestionDto
 {
     [Required]
     [SwaggerSchema("Nuevo texto de la pregunta.")]
-    public string QuestionText { get; set; } = null!;
+    public string Text { get; set; } = null!;
+
+    [SwaggerSchema("Nueva posición.")]
+    public int Order { get; set; } = 0;
 
     [SwaggerSchema("Nuevo tipo.")]
     public string QuestionType { get; set; } = "SingleChoice";
 
     [SwaggerSchema("¿Es obligatoria?")]
     public bool IsRequired { get; set; } = false;
-
-    [SwaggerSchema("Nueva posición.")]
-    public int OrderPosition { get; set; } = 0;
 }
 
-public class ScoringTemplateQuestionResponseDto
+public class ScoringQuestionResponseDto
 {
-    public int TemplateQuestionId { get; set; }
-    public string QuestionText { get; set; } = null!;
+    public int Id { get; set; }
+    public string Text { get; set; } = null!;
+    public int Order { get; set; }
     public string QuestionType { get; set; } = null!;
     public bool IsRequired { get; set; }
-    public int OrderPosition { get; set; }
-    public List<ScoringTemplateAnswerOptionResponseDto> AnswerOptions { get; set; } = new();
+    public List<ScoringAnswerResponseDto> Answers { get; set; } = new();
 }
 
 // ── ScoringTemplateAnswerOption ──────────────────────────────────
 
-public class CreateScoringTemplateAnswerOptionDto
+public class CreateScoringAnswerDto
 {
     [Required]
     /// <example>Sí, tiene presupuesto definido</example>
     [SwaggerSchema("Texto de la respuesta.", Nullable = false)]
-    public string AnswerText { get; set; } = null!;
+    public string Text { get; set; } = null!;
 
     /// <example>30</example>
     [SwaggerSchema("Puntos que otorga esta respuesta al score del lead.")]
-    public decimal Points { get; set; } = 0;
+    public decimal Score { get; set; } = 0;
 
     [SwaggerSchema("Posición visual de la respuesta.")]
-    public int OrderPosition { get; set; } = 0;
+    public int Order { get; set; } = 0;
 }
 
-public class UpdateScoringTemplateAnswerOptionDto
+public class UpdateScoringAnswerDto
 {
     [Required]
     [SwaggerSchema("Nuevo texto de la respuesta.")]
-    public string AnswerText { get; set; } = null!;
+    public string Text { get; set; } = null!;
 
     [SwaggerSchema("Nuevos puntos.")]
-    public decimal Points { get; set; } = 0;
+    public decimal Score { get; set; } = 0;
 
     [SwaggerSchema("Nueva posición.")]
-    public int OrderPosition { get; set; } = 0;
+    public int Order { get; set; } = 0;
 }
 
-public class ScoringTemplateAnswerOptionResponseDto
+public class ScoringAnswerResponseDto
 {
-    public int TemplateAnswerId { get; set; }
-    public string AnswerText { get; set; } = null!;
-    public decimal Points { get; set; }
-    public int OrderPosition { get; set; }
+    public int Id { get; set; }
+    public string Text { get; set; } = null!;
+    public decimal Score { get; set; }
+    public int Order { get; set; }
 }

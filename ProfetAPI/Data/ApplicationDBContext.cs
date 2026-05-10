@@ -49,10 +49,14 @@ namespace ProfetAPI.Data
         public DbSet<ScoringTemplateQuestion> ScoringTemplateQuestions { get; set; } = null!;
         public DbSet<ScoringTemplateAnswerOption> ScoringTemplateAnswerOptions { get; set; } = null!;
 
+        // --- BRANDING GLOBAL ---
+        public DbSet<GlobalBranding> GlobalBranding { get; set; } = null!;
+
         // --- DBSETS FASE 1 — CATÁLOGOS NUEVOS ---
+        public DbSet<LeadLostReasonTemplate> LeadLostReasonTemplates { get; set; } = null!;
         public DbSet<LeadLostReason> LeadLostReasons { get; set; } = null!;
-        public DbSet<AccountLeadLostReason> AccountLeadLostReasons { get; set; } = null!;
         public DbSet<AccountIndustry> AccountIndustries { get; set; } = null!;
+        public DbSet<AccountProspectSource> AccountProspectSources { get; set; } = null!;
 
         // --- DBSETS PARA CAMPOS PERSONALIZADOS ---
         public DbSet<CustomFieldDefinition> CustomFieldDefinitions { get; set; } = null!;
@@ -79,7 +83,9 @@ namespace ProfetAPI.Data
         public DbSet<ItemCatalog> ItemCatalogs { get; set; } = null!;
         public DbSet<CatalogItem> CatalogItems { get; set; } = null!;
         public DbSet<DealItem> DealItems { get; set; } = null!;
+        public DbSet<ContactWhatsapp> ContactsWhatsapp { get; set; } = null!;
         public DbSet<MessagesWhatsapp> MessagesWhatsapp { get; set; } = null!;
+        public DbSet<SavedResponseWhatsapp> SavedResponsesWhatsapp { get; set; } = null!;
         public DbSet<Notification> Notifications { get; set; } = null!;
         public DbSet<NotificationType> NotificationTypes { get; set; } = null!;
         public DbSet<Log> Logs { get; set; } = null!;
@@ -116,14 +122,32 @@ namespace ProfetAPI.Data
             
             // Llaves Compuestas
             builder.Entity<UserTeam>().HasKey(ut => new { ut.UserId, ut.TeamId });
+
+            // Team → Leader (FK opcional, SET NULL al borrar el usuario líder)
+            builder.Entity<Team>()
+                .HasOne(t => t.Leader)
+                .WithMany()
+                .HasForeignKey(t => t.LeaderId)
+                .OnDelete(DeleteBehavior.SetNull);
             builder.Entity<AccountInternalUser>().HasKey(aiu => new { aiu.AccountId, aiu.UserId, aiu.RoleInAccount });
             builder.Entity<PlanFeature>().HasKey(pf => new { pf.PlanId, pf.FeatureId });
             builder.Entity<AccountCustomField>().HasKey(acf => new { acf.AccountId, acf.FieldId });
+            builder.Entity<AccountCustomField>()
+                .HasOne(acf => acf.CustomFieldDefinition)
+                .WithMany()
+                .HasForeignKey(acf => acf.FieldId);
             builder.Entity<DealUser>().HasKey(du => new { du.DealId, du.UserId });
             builder.Entity<DealItem>().HasKey(di => new { di.DealId, di.ItemId });
             builder.Entity<SharedWidget>().HasKey(sw => new { sw.ShareLinkId, sw.WidgetId });
-            builder.Entity<Tagging>().HasKey(t => new { t.TagId, t.EntityId, t.EntityType });
-            builder.Entity<AccountLeadLostReason>().HasKey(a => new { a.AccountId, a.LostReasonId });
+            // FK: Tagging.TagId → Tag.TagId (columna TagsLeadId → Id)
+            builder.Entity<Tagging>()
+                .HasOne(t => t.Tag)
+                .WithMany()
+                .HasForeignKey(t => t.TagId);
+            builder.Entity<LeadLostReason>()
+                .HasOne(r => r.Account)
+                .WithMany()
+                .HasForeignKey(r => r.AccountId);
             builder.Entity<SubscriptionFeatureOverride>().HasKey(s => new { s.SubscriptionId, s.FeatureId });
             builder.Entity<SubscriptionFeatureOverride>().ToTable("SubscriptionFeatureOverrides");
 
@@ -142,6 +166,13 @@ namespace ProfetAPI.Data
                 b.HasOne(a => a.CallDetail).WithOne(cd => cd.Activity).HasForeignKey<CallDetail>(cd => cd.ActivityId);
             });
 
+            builder.Entity<FunnelTemplateStage>(b => {
+                b.HasOne(s => s.FunnelTemplate)
+                 .WithMany(t => t.Stages)
+                 .HasForeignKey(s => s.TemplateId);
+                b.Property(s => s.Order).HasColumnName("StageOrder");
+            });
+
             // Mapeo de nombres de tabla para las que ya existen
             builder.Entity<Customer>().ToTable("Customers");
             builder.Entity<Team>().ToTable("Teams");
@@ -156,20 +187,52 @@ namespace ProfetAPI.Data
             builder.Entity<UserLine>().ToTable("UserLines");
             builder.Entity<Industry>().ToTable("Industries");
             builder.Entity<ContactForm>().ToTable("ContactForms");
-            builder.Entity<MessagesWhatsapp>().ToTable("MessagesWhatsapp");
+            builder.Entity<MessagesWhatsapp>().ToTable("MessagesWhatsapps");
+            builder.Entity<SavedResponseWhatsapp>().ToTable("SavedResponseWhatsapps");
+            builder.Entity<ContactWhatsapp>().ToTable("ContactsWhatsapps");
+            builder.Entity<ContactWhatsapp>()
+                .HasOne(c => c.LinkedContact)
+                .WithMany()
+                .HasForeignKey(c => c.LinkedContactId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.ClientSetNull);
+            builder.Entity<ContactWhatsapp>()
+                .HasMany(c => c.Messages)
+                .WithOne(m => m.Contact)
+                .HasForeignKey(m => m.ContactId)
+                .OnDelete(DeleteBehavior.Cascade);
             builder.Entity<Notification>().ToTable("Notifications");
             builder.Entity<NotificationType>().ToTable("NotificationTypes");
 
             // Nuevas tablas del núcleo del CRM
             builder.Entity<Lead>().ToTable("Leads");
+            builder.Entity<Lead>()
+                .HasOne(l => l.Owner)
+                .WithMany()
+                .HasForeignKey(l => l.OwnerUserId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
+            builder.Entity<Lead>()
+                .HasOne(l => l.Contact)
+                .WithMany()
+                .HasForeignKey(l => l.ContactId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
+            builder.Entity<Lead>()
+                .HasOne(l => l.Account)
+                .WithMany()
+                .HasForeignKey(l => l.AccountId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
             builder.Entity<Company>().ToTable("Companies");
             builder.Entity<Contact>().ToTable("Contacts");
             builder.Entity<Deal>().ToTable("Deals");
 
             // Fase 1 — Catálogos
+            builder.Entity<LeadLostReasonTemplate>().ToTable("LeadLostReasonTemplates");
             builder.Entity<LeadLostReason>().ToTable("LeadLostReasons");
-            builder.Entity<AccountLeadLostReason>().ToTable("AccountLeadLostReasons");
             builder.Entity<AccountIndustry>().ToTable("AccountIndustries");
+            builder.Entity<AccountProspectSource>().ToTable("AccountProspectSources");
             builder.Entity<ScoringRuleCondition>().ToTable("ScoringRuleConditions");
         }
     }

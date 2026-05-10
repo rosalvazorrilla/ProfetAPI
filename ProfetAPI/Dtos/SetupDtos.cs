@@ -112,6 +112,12 @@ namespace ProfetAPI.Dtos
         public List<long> IndustryIds { get; set; } = new();
     }
 
+    public class SetupProspectSourcesDto
+    {
+        [SwaggerSchema("IDs de las fuentes de prospectos seleccionadas para esta cuenta.")]
+        public List<int> SourceIds { get; set; } = new();
+    }
+
     // ════════════════════════════════════════════════════════════
     // EMBUDO
     // ════════════════════════════════════════════════════════════
@@ -199,6 +205,19 @@ namespace ProfetAPI.Dtos
         public bool IsVisibleOnCard { get; set; } = false;
     }
 
+    public class CreateCustomFieldDto
+    {
+        [Required]
+        [SwaggerSchema("Nombre legible del campo personalizado (ej: 'Presupuesto anual').")]
+        public string FieldName { get; set; } = null!;
+
+        [SwaggerSchema("Tipo de dato: text, number, date, select, textarea, email, phone.")]
+        public string FieldType { get; set; } = "text";
+
+        [SwaggerSchema("Opciones separadas por coma para campos tipo 'select'. Ej: 'Opción 1,Opción 2'")]
+        public string? Options { get; set; }
+    }
+
     // ════════════════════════════════════════════════════════════
     // SCORING
     // ════════════════════════════════════════════════════════════
@@ -218,6 +237,49 @@ namespace ProfetAPI.Dtos
 
         [SwaggerSchema("Umbrales de clasificación del lead. Si se omite se crean 3 tiers por defecto (Frío/Tibio/Caliente).")]
         public List<SetupTierDto> Tiers { get; set; } = new();
+
+        [SwaggerSchema("Reglas de bonus — puntos extra si se cumplen condiciones de respuestas específicas.")]
+        public List<SetupScoringRuleDto> Rules { get; set; } = new();
+    }
+
+    public class SetupScoringRuleDto
+    {
+        [SwaggerSchema("Nombre descriptivo de la regla. Ej: 'Bonus director + empresa grande'.")]
+        public string? Name { get; set; }
+
+        [SwaggerSchema("Puntos extra que se suman si se cumplen todas (o alguna) de las condiciones.")]
+        public decimal BonusPoints { get; set; } = 0;
+
+        [SwaggerSchema("Orden de evaluación de la regla.")]
+        public int ExecutionOrder { get; set; } = 0;
+
+        [SwaggerSchema("Lista de condiciones que deben cumplirse.")]
+        public List<SetupScoringRuleConditionDto> Conditions { get; set; } = new();
+    }
+
+    public class SetupScoringRuleConditionDto
+    {
+        /// <summary>
+        /// answer | field_filled | field_equals | field_contains | response_time | prospect_source
+        /// </summary>
+        public string ConditionType { get; set; } = "answer";
+
+        // Para ConditionType = "answer"
+        [SwaggerSchema("OrderPosition de la pregunta a evaluar (solo type=answer).")]
+        public int? QuestionOrderPosition { get; set; }
+
+        [SwaggerSchema("OrderPosition de la respuesta dentro de esa pregunta (solo type=answer).")]
+        public int? AnswerOrderPosition { get; set; }
+
+        // Para condiciones de variable / tiempo / fuente
+        [SwaggerSchema("FieldId del CustomFieldDefinition a evaluar.")]
+        public int? FieldId { get; set; }
+
+        [SwaggerSchema("Valor a comparar. Ej: 'Referido', '5' (horas), 'urgente'.")]
+        public string? ConditionValue { get; set; }
+
+        [SwaggerSchema("Operador lógico con la siguiente condición: 'AND' | 'OR'")]
+        public string LogicOperator { get; set; } = "AND";
     }
 
     public class SetupScoringQuestionDto
@@ -276,6 +338,35 @@ namespace ProfetAPI.Dtos
         public int? OriginatingTemplateId { get; set; }
         public List<SetupScoringQuestionResponseDto> Questions { get; set; } = new();
         public List<SetupTierResponseDto> Tiers { get; set; } = new();
+        public List<SetupScoringRuleResponseDto> Rules { get; set; } = new();
+    }
+
+    public class SetupScoringRuleResponseDto
+    {
+        public int RuleId { get; set; }
+        public string? Name { get; set; }
+        public decimal BonusPoints { get; set; }
+        public int ExecutionOrder { get; set; }
+        public List<SetupScoringRuleConditionResponseDto> Conditions { get; set; } = new();
+    }
+
+    public class SetupScoringRuleConditionResponseDto
+    {
+        public int ConditionId { get; set; }
+        public string ConditionType { get; set; } = "answer";
+
+        // answer
+        public int? QuestionId { get; set; }
+        public int? AnswerOptionId { get; set; }
+        public int? QuestionOrderPosition { get; set; }
+        public int? AnswerOrderPosition { get; set; }
+
+        // variable / tiempo / fuente
+        public int? FieldId { get; set; }
+        public string? FieldName { get; set; }
+        public string? ConditionValue { get; set; }
+
+        public string LogicOperator { get; set; } = "AND";
     }
 
     public class SetupScoringQuestionResponseDto
@@ -318,8 +409,11 @@ namespace ProfetAPI.Dtos
 
     public class SetupCatalogsDto
     {
-        [SwaggerSchema("IDs de los motivos de pérdida del catálogo global a habilitar para esta cuenta.")]
+        [SwaggerSchema("IDs de los templates de motivos a habilitar para esta cuenta (se crean como LeadLostReason).")]
         public List<int> LostReasonIds { get; set; } = new();
+
+        [SwaggerSchema("Motivos personalizados nuevos (texto libre) a crear en la cuenta.")]
+        public List<string> CustomLostReasons { get; set; } = new();
 
         [SwaggerSchema("IDs de las fuentes de prospectos globales a habilitar.")]
         public List<int> ProspectSourceIds { get; set; } = new();
@@ -430,7 +524,10 @@ namespace ProfetAPI.Dtos
         [SwaggerSchema("Nombre del equipo.", Nullable = false)]
         public string Name { get; set; } = null!;
 
-        [SwaggerSchema("IDs de usuarios que pertenecen al equipo.")]
+        [SwaggerSchema("ID del usuario que lidera este equipo (Manager). Define quién puede ver los leads de todos los miembros.")]
+        public string? LeaderId { get; set; }
+
+        [SwaggerSchema("IDs de usuarios que pertenecen al equipo (miembros, sin incluir al líder).")]
         public List<string> UserIds { get; set; } = new();
     }
 
@@ -440,7 +537,10 @@ namespace ProfetAPI.Dtos
         [SwaggerSchema("Nuevo nombre del equipo.")]
         public string Name { get; set; } = null!;
 
-        [SwaggerSchema("IDs de usuarios. Reemplaza la lista actual.")]
+        [SwaggerSchema("ID del nuevo líder del equipo. Puede ser null para quitar el líder.")]
+        public string? LeaderId { get; set; }
+
+        [SwaggerSchema("IDs de usuarios miembros. Reemplaza la lista actual.")]
         public List<string> UserIds { get; set; } = new();
     }
 
@@ -448,6 +548,8 @@ namespace ProfetAPI.Dtos
     {
         public int TeamId { get; set; }
         public string Name { get; set; } = null!;
+        public string? LeaderId { get; set; }
+        public string? LeaderName { get; set; }
         public List<SetupTeamMemberDto> Members { get; set; } = new();
     }
 
@@ -507,5 +609,41 @@ namespace ProfetAPI.Dtos
         public string LoginUrl { get; set; } = null!;
         public int AccountsActivated { get; set; }
         public int UsersActivated { get; set; }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // BRANDING / WHITE-LABEL
+    // ════════════════════════════════════════════════════════════
+
+    public class SetupBrandingDto
+    {
+        [SwaggerSchema("Nombre de la app (reemplaza 'Profet' en la UI). Null = usar default.")]
+        public string? BrandName { get; set; }
+
+        [SwaggerSchema("URL del logo grande — sidebar expandido, emails, pantalla de login.")]
+        public string? BrandLogoUrl { get; set; }
+
+        [SwaggerSchema("URL del logo pequeño/ícono — sidebar colapsado, favicon móvil. Cuadrado recomendado.")]
+        public string? BrandLogoSmallUrl { get; set; }
+
+        [SwaggerSchema("Color primario en hexadecimal, ej: #1CAF9A. Null = color por defecto.")]
+        public string? BrandPrimaryColor { get; set; }
+
+        [SwaggerSchema("Color secundario en hexadecimal, ej: #5F6CAF. Null = color por defecto.")]
+        public string? BrandSecondaryColor { get; set; }
+
+        [SwaggerSchema("URL del favicon (.ico o .png 32x32). Null = favicon por defecto.")]
+        public string? BrandFaviconUrl { get; set; }
+    }
+
+    public class SetupBrandingResponseDto
+    {
+        public string? BrandName { get; set; }
+        public string? BrandLogoUrl { get; set; }
+        public string? BrandLogoSmallUrl { get; set; }
+        public string? BrandPrimaryColor { get; set; }
+        public string? BrandSecondaryColor { get; set; }
+        public string? BrandFaviconUrl { get; set; }
+        public bool IsCustomized { get; set; }
     }
 }

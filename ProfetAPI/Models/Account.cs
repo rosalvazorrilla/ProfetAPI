@@ -22,7 +22,6 @@ public class Account
     public string? AssignmentUserId { get; set; }
 
     // Paquetes de Configuración (FKs)
-    public int? LeadLostReasonsPackagesId { get; set; }
     public int? LeadDealsTypesPackagesId { get; set; }
     public int? ActivitiesTemplateId { get; set; }
 

@@ -16,5 +16,8 @@ namespace ProfetAPI.Dtos
 
         [SwaggerSchema("El rol principal del usuario (ej. 'Admin', 'Vendedor').")]
         public string Role { get; set; } = string.Empty;
+
+        [SwaggerSchema("ID del tenant (Customer) al que pertenece el usuario. 0 si es AdminGlobal.")]
+        public int CustomerId { get; set; }
     }
 }

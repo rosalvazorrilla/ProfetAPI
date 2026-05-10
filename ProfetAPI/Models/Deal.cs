@@ -32,6 +32,7 @@ public class Deal
     [Required]
     public string DealType { get; set; } = "NewBusiness";
 
+    [ForeignKey("OriginatingLead")]
     public long? OriginatingLeadId { get; set; }
     public DateTime CreatedOn { get; set; }
 
@@ -48,4 +49,5 @@ public class Deal
     public virtual LeadTier? LeadTier { get; set; }
     public virtual ICollection<DealUser> DealUsers { get; set; } = new List<DealUser>();
     public virtual ICollection<DealPayment> Payments { get; set; } = new List<DealPayment>();
+    public virtual Lead? OriginatingLead { get; set; }
 }

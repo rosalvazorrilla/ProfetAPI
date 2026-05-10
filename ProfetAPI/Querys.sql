@@ -847,6 +847,106 @@ DROP TABLE dbo.Activities_Old_Archived;
 COMMIT TRANSACTION;
 GO
 
+-- ####################################################################
+-- ### FIX: Renombrar columna Order → StageOrder en FunnelTemplateStages
+-- ### (Order es palabra reservada en SQL Server)
+-- ####################################################################
+EXEC sp_rename 'dbo.FunnelTemplateStages.Order', 'StageOrder', 'COLUMN';
+GO
+
+-- ####################################################################
+-- ### TABLAS FALTANTES: CustomFieldDefinitions, AccountCustomFields,
+-- ### CustomFieldValues — ejecutar en Azure SQL una sola vez
+-- ####################################################################
+
+-- Pool global de variables capturables en leads
+CREATE TABLE dbo.CustomFieldDefinitions (
+    FieldId    INT           IDENTITY(1,1) NOT NULL,
+    FieldCode  NVARCHAR(100) NOT NULL,
+    FieldName  NVARCHAR(200) NOT NULL,
+    FieldType  NVARCHAR(50)  NOT NULL CONSTRAINT DF_CFD_FieldType DEFAULT 'text',
+    CONSTRAINT PK_CustomFieldDefinitions PRIMARY KEY (FieldId),
+    CONSTRAINT UQ_CustomFieldDefinitions_FieldCode UNIQUE (FieldCode)
+);
+GO
+
+-- Variables activadas por Account (llave compuesta AccountId + FieldId)
+CREATE TABLE dbo.AccountCustomFields (
+    AccountId       INT NOT NULL,
+    FieldId         INT NOT NULL,
+    IsVisibleOnCard BIT NOT NULL CONSTRAINT DF_ACF_IsVisibleOnCard DEFAULT 0,
+    CONSTRAINT PK_AccountCustomFields PRIMARY KEY (AccountId, FieldId),
+    CONSTRAINT FK_ACF_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId) ON DELETE CASCADE,
+    CONSTRAINT FK_ACF_FieldDef FOREIGN KEY (FieldId)   REFERENCES dbo.CustomFieldDefinitions(FieldId)
+);
+GO
+
+-- Valores de campos personalizados por entidad (Lead, Deal, Contact, etc.)
+CREATE TABLE dbo.CustomFieldValues (
+    ValueId    INT           IDENTITY(1,1) NOT NULL,
+    EntityId   BIGINT        NOT NULL,
+    EntityType NVARCHAR(50)  NOT NULL,
+    FieldId    INT           NOT NULL,
+    Value      NVARCHAR(MAX) NULL,
+    CONSTRAINT PK_CustomFieldValues PRIMARY KEY (ValueId),
+    CONSTRAINT FK_CFV_FieldDef FOREIGN KEY (FieldId) REFERENCES dbo.CustomFieldDefinitions(FieldId)
+);
+GO
+
+-- ####################################################################
+-- ### SEED: Plantillas de Embudos de Venta (3 sugerencias base)
+-- ####################################################################
+
+-- ── 1. Ciclo de Venta B2B ─────────────────────────────────────────
+--    Para ventas empresariales con ciclo largo y múltiples decisores
+DECLARE @FunnelB2B INT;
+INSERT INTO dbo.FunnelTemplates (Name, Description)
+VALUES ('Ciclo de Venta B2B', 'Embudo para ventas empresariales con múltiples etapas de evaluación y decisores.');
+SET @FunnelB2B = SCOPE_IDENTITY();
+
+INSERT INTO dbo.FunnelTemplateStages (TemplateId, StageName, StageOrder) VALUES
+(@FunnelB2B, 'Prospecto',           1),
+(@FunnelB2B, 'Primer Contacto',     2),
+(@FunnelB2B, 'Calificación',        3),
+(@FunnelB2B, 'Demo / Presentación', 4),
+(@FunnelB2B, 'Cotización',          5),
+(@FunnelB2B, 'Negociación',         6),
+(@FunnelB2B, 'Cierre',              7);
+GO
+
+-- ── 2. Venta Directa ──────────────────────────────────────────────
+--    Para ventas rápidas, transaccionales o de consumidor final
+DECLARE @FunnelDirecto INT;
+INSERT INTO dbo.FunnelTemplates (Name, Description)
+VALUES ('Venta Directa', 'Embudo ágil para ciclos cortos: primer contacto, cotización y cierre en pocos pasos.');
+SET @FunnelDirecto = SCOPE_IDENTITY();
+
+INSERT INTO dbo.FunnelTemplateStages (TemplateId, StageName, StageOrder) VALUES
+(@FunnelDirecto, 'Nuevo Lead',         1),
+(@FunnelDirecto, 'Primer Contacto',    2),
+(@FunnelDirecto, 'Cotización Enviada', 3),
+(@FunnelDirecto, 'Seguimiento',        4),
+(@FunnelDirecto, 'Cierre',             5);
+GO
+
+-- ── 3. Sector Inmobiliario ────────────────────────────────────────
+--    Para ventas de bienes raíces con recorridos, documentación y escritura
+DECLARE @FunnelInmobiliario INT;
+INSERT INTO dbo.FunnelTemplates (Name, Description)
+VALUES ('Sector Inmobiliario', 'Embudo para venta de propiedades: desde el primer contacto hasta la escrituración.');
+SET @FunnelInmobiliario = SCOPE_IDENTITY();
+
+INSERT INTO dbo.FunnelTemplateStages (TemplateId, StageName, StageOrder) VALUES
+(@FunnelInmobiliario, 'Prospecto',          1),
+(@FunnelInmobiliario, 'Primer Contacto',    2),
+(@FunnelInmobiliario, 'Visita / Recorrido', 3),
+(@FunnelInmobiliario, 'Interesado',         4),
+(@FunnelInmobiliario, 'Documentación',      5),
+(@FunnelInmobiliario, 'Oferta Presentada',  6),
+(@FunnelInmobiliario, 'Proceso Legal',      7),
+(@FunnelInmobiliario, 'Escrituración',      8);
+GO
+
 PRINT '--- ¡MIGRACIÓN DEL NÚCLEO DEL CRM COMPLETADA! ---';
 
 PRINT '--- Creando tablas de metadatos para reportes... ---';
@@ -1573,4 +1673,743 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('PlanPriceH
 BEGIN
     ALTER TABLE PlanPriceHistory ADD CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE();
 END
+GO
+
+-- ============================================================
+-- Funnels — agregar OriginatingTemplateId (FK a FunnelTemplates)
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Funnels') AND name = 'OriginatingTemplateId')
+BEGIN
+    ALTER TABLE Funnels ADD OriginatingTemplateId INT NULL;
+    ALTER TABLE Funnels ADD CONSTRAINT FK_Funnels_FunnelTemplates
+        FOREIGN KEY (OriginatingTemplateId) REFERENCES FunnelTemplates(TemplateId);
+END
+GO
+
+-- ============================================================
+-- SEED — Motivos de Pérdida (catálogo global)
+-- Solo inserta si la tabla está vacía para no duplicar en re-ejecuciones
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM LeadLostReasons)
+BEGIN
+    INSERT INTO LeadLostReasons (Description, ConversionRate, IsActive) VALUES
+    ('Precio muy alto',                     1, 1),
+    ('Eligió a la competencia',             1, 1),
+    ('Sin presupuesto en este momento',     1, 1),
+    ('No hay necesidad inmediata',          0, 1),
+    ('Sin respuesta / No contactable',      0, 1),
+    ('Proyecto cancelado o pausado',        0, 1),
+    ('No cumple requerimientos técnicos',   0, 1),
+    ('Tiempo de decisión muy largo',        0, 1),
+    ('Cambio de prioridades internas',      0, 1),
+    ('Mala experiencia con el proceso',     1, 1);
+END
+GO
+
+-- ============================================================
+-- Customers — agregar columnas White-Label / Branding
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Customers') AND name = 'BrandName')
+    ALTER TABLE Customers ADD BrandName NVARCHAR(100) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Customers') AND name = 'BrandLogoUrl')
+    ALTER TABLE Customers ADD BrandLogoUrl NVARCHAR(500) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Customers') AND name = 'BrandPrimaryColor')
+    ALTER TABLE Customers ADD BrandPrimaryColor VARCHAR(20) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Customers') AND name = 'BrandSecondaryColor')
+    ALTER TABLE Customers ADD BrandSecondaryColor VARCHAR(20) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Customers') AND name = 'BrandFaviconUrl')
+    ALTER TABLE Customers ADD BrandFaviconUrl NVARCHAR(500) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Customers') AND name = 'BrandLogoSmallUrl')
+    ALTER TABLE Customers ADD BrandLogoSmallUrl NVARCHAR(500) NULL;
+GO
+
+-- ============================================================
+-- GlobalBranding — tabla de marca global de la plataforma (1 sola fila)
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID('GlobalBranding') AND type = 'U')
+BEGIN
+    CREATE TABLE GlobalBranding (
+        Id              INT          NOT NULL DEFAULT 1,
+        AppName         NVARCHAR(100) NULL,
+        LogoLargeUrl    NVARCHAR(500) NULL,
+        LogoSmallUrl    NVARCHAR(500) NULL,
+        PrimaryColor    VARCHAR(20)  NULL,
+        SecondaryColor  VARCHAR(20)  NULL,
+        FaviconUrl      NVARCHAR(500) NULL,
+        CONSTRAINT PK_GlobalBranding PRIMARY KEY (Id),
+        CONSTRAINT CK_GlobalBranding_SingleRow CHECK (Id = 1)
+    );
+    -- Insertar la fila por defecto
+    INSERT INTO GlobalBranding (Id) VALUES (1);
+END
+GO
+
+-- ============================================================
+-- Teams.LeaderId — líder del equipo (Manager que supervisa a los miembros)
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Teams') AND name = 'LeaderId')
+BEGIN
+    ALTER TABLE Teams ADD LeaderId NVARCHAR(450) NULL;
+    ALTER TABLE Teams ADD CONSTRAINT FK_Teams_Leader
+        FOREIGN KEY (LeaderId) REFERENCES Users(Id)
+        ON DELETE SET NULL;
+END
+GO
+
+-- ============================================================
+-- MIGRACIÓN DE VARIABLES (ejecutar una sola vez)
+-- ============================================================
+-- PASO 1: dbo.Variables → CustomFieldDefinitions
+-- Mueve el pool global de campos al nuevo esquema.
+-- Usa GROUP BY para evitar duplicados si dbo.Variables tiene filas repetidas.
+-- ============================================================
+INSERT INTO dbo.CustomFieldDefinitions (FieldCode, FieldName, FieldType)
+SELECT
+    v.Value             AS FieldCode,
+    MAX(v.Description)  AS FieldName,
+    'text'              AS FieldType
+FROM dbo.Variables v
+WHERE v.Value IS NOT NULL
+  AND v.Description IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM dbo.CustomFieldDefinitions cfd
+      WHERE cfd.FieldCode = v.Value
+  )
+GROUP BY v.Value;
+GO
+
+-- ============================================================
+-- PASO 2: Campaigns.Variables (CSV) → AccountCustomFields
+-- La columna Variables quedó en dbo.Campaigns (la tabla vieja).
+-- El CSV usa tokens sin prefijo (ej: "name","email","phone").
+-- CustomFieldDefinitions.FieldCode usa prefijo "t_" (ej: "t_name","t_email").
+-- Mapeo: token = FieldCode sin "t_"  →  busca "t_" + token en CustomFieldDefinitions.
+-- Tokens del sistema (id, leadDate, leadScore, status...) no tienen match → se ignoran.
+-- La relación con Accounts se hace por Campaigns.Id = Accounts.AccountId (mismos IDs).
+-- ============================================================
+INSERT INTO dbo.AccountCustomFields (AccountId, FieldId, IsVisibleOnCard)
+SELECT DISTINCT
+    a.AccountId,
+    cfd.FieldId,
+    0 AS IsVisibleOnCard
+FROM dbo.Campaigns c
+INNER JOIN dbo.Accounts a ON a.AccountId = c.Id
+CROSS APPLY STRING_SPLIT(c.Variables, ',') AS tokens
+INNER JOIN dbo.CustomFieldDefinitions cfd
+    ON cfd.FieldCode = 't_' + LTRIM(RTRIM(tokens.value))
+WHERE c.Variables IS NOT NULL
+  AND c.Variables != ''
+  AND NOT EXISTS (
+      SELECT 1 FROM dbo.AccountCustomFields acf
+      WHERE acf.AccountId = a.AccountId AND acf.FieldId = cfd.FieldId
+  );
+GO
+
+-- ============================================================
+-- CustomFieldDefinitions: columna Options para campos tipo lista
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CustomFieldDefinitions') AND name = 'Options')
+    ALTER TABLE dbo.CustomFieldDefinitions ADD Options NVARCHAR(MAX) NULL;
+GO
+
+-- ============================================================
+-- TRADUCCIONES: CustomFieldDefinitions → nombres en español
+-- Ejecutar una sola vez. Idempotente (UPDATE por FieldCode).
+-- ============================================================
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Nombre'                WHERE FieldCode = 't_name';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Correo electrónico'    WHERE FieldCode = 't_email';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Teléfono'              WHERE FieldCode = 't_phone';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Empresa'               WHERE FieldCode = 't_company';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Calle y número'        WHERE FieldCode = 't_streetAndNumber';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Colonia'               WHERE FieldCode = 't_colony';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Ciudad'                WHERE FieldCode = 't_city';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Estado'                WHERE FieldCode = 't_state';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Código postal'         WHERE FieldCode = 't_cp';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Cargo / Puesto'        WHERE FieldCode = 't_jobTitle';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Edad'                  WHERE FieldCode = 't_age';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Género'                WHERE FieldCode = 't_genre';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Mensaje enviado'       WHERE FieldCode = 't_messageSent';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Comentarios'           WHERE FieldCode = 't_comments';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Fuente del prospecto'  WHERE FieldCode = 't_prospectSource';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Formulario de contacto' WHERE FieldCode = 't_contactForm';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Fecha de nacimiento'   WHERE FieldCode = 't_birthday';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Estado civil'          WHERE FieldCode = 't_civilStatus';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'NSE'                   WHERE FieldCode = 't_nse';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Tipo de empresa'       WHERE FieldCode = 't_companyType';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Sector / Industria'    WHERE FieldCode = 't_industrySector';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Número de empleados'   WHERE FieldCode = 't_employees';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Interés'               WHERE FieldCode = 't_interest';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Preferencias'          WHERE FieldCode = 't_preferences';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Actividades'           WHERE FieldCode = 't_activities';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Práctica deportiva'    WHERE FieldCode = 't_practiceSports';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Hábitos'               WHERE FieldCode = 't_habits';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Valores'               WHERE FieldCode = 't_values';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Creencias'             WHERE FieldCode = 't_beliefs';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Presupuesto'           WHERE FieldCode = 't_budget';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Decisión de compra'    WHERE FieldCode = 't_buyingDecision';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Grado de necesidad'    WHERE FieldCode = 't_needDegree';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Tiempo de compra'      WHERE FieldCode = 't_buyingTime';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Calidad del prospecto' WHERE FieldCode = 't_qualityScore';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Nivel de engagement'   WHERE FieldCode = 't_engagement';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Contacto adicional'    WHERE FieldCode = 't_contact';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Posición'              WHERE FieldCode = 't_position';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Tamaño de empresa'     WHERE FieldCode = 't_size';
+GO
+
+-- ============================================================
+-- TRADUCCIONES: campos restantes (segunda tanda)
+-- ============================================================
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Activo'                    WHERE FieldCode = 't_active';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Nombre del anuncio'        WHERE FieldCode = 't_adName';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Asesor'                    WHERE FieldCode = 't_adviser';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Creencias'                 WHERE FieldCode = 't_believes';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Facturación'               WHERE FieldCode = 't_billing';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Sucursal'                  WHERE FieldCode = 't_branch';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Marca'                     WHERE FieldCode = 't_brand';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Actividad empresarial'     WHERE FieldCode = 't_businessActivity';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Razón social'              WHERE FieldCode = 't_businessName';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Capacidad'                 WHERE FieldCode = 't_capacity';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Nombre del contacto'       WHERE FieldCode = 't_contactName';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Crédito'                   WHERE FieldCode = 't_credit';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Buró de crédito'           WHERE FieldCode = 't_creditBureau';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Cliente'                   WHERE FieldCode = 't_customer';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Fecha'                     WHERE FieldCode = 't_date';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Diagnóstico'               WHERE FieldCode = 't_diagnosis';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Emociones'                 WHERE FieldCode = 't_emotions';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Experiencia'               WHERE FieldCode = 't_experience';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Frecuencia'                WHERE FieldCode = 't_frequency';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Sector / Industria'        WHERE FieldCode = 't_indistrySector';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Intereses'                 WHERE FieldCode = 't_interests';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Interesado en'             WHERE FieldCode = 't_interestedIn';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Tipo'                      WHERE FieldCode = 't_kind';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Nivel de estudios'         WHERE FieldCode = 't_levelOfStudy';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Ubicación'                 WHERE FieldCode = 't_location';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Modelo'                    WHERE FieldCode = 't_model';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Valor de la oportunidad'   WHERE FieldCode = 't_opportunityValue';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Mascotas'                  WHERE FieldCode = 't_pets';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Producto'                  WHERE FieldCode = 't_product';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Empresa generadora'        WHERE FieldCode = 't_prospectGeneratorCompany';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Cantidad'                  WHERE FieldCode = 't_quantity';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Rango'                     WHERE FieldCode = 't_rank';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Servicio'                  WHERE FieldCode = 't_service';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'CURP / NSS'                WHERE FieldCode = 't_socialSecurityNumber';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Tiempo'                    WHERE FieldCode = 't_time';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Unidad'                    WHERE FieldCode = 't_unit';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Versión'                   WHERE FieldCode = 't_version';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Volumen'                   WHERE FieldCode = 't_volume';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Garantía'                  WHERE FieldCode = 't_warranty';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Año'                       WHERE FieldCode = 't_year';
+UPDATE dbo.CustomFieldDefinitions SET FieldName = 'Zona'                      WHERE FieldCode = 't_zone';
+GO
+
+-- ============================================================
+-- IsSystem: columna + marcar campos internos del CRM
+-- No aparecen en el wizard (el usuario no los configura).
+-- ============================================================
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CustomFieldDefinitions') AND name = 'IsSystem')
+    ALTER TABLE dbo.CustomFieldDefinitions ADD IsSystem BIT NOT NULL DEFAULT 0;
+GO
+
+UPDATE dbo.CustomFieldDefinitions SET IsSystem = 1 WHERE FieldCode IN (
+    't_id',               -- ID interno
+    't_dealId',           -- ID del trato
+    't_stageId',          -- ID de etapa
+    't_stageName',        -- Nombre de etapa (calculado)
+    't_leadDate',         -- Fecha del lead (auto)
+    't_leadExportDate',   -- Fecha de exportación (auto)
+    't_leadScore',        -- Puntaje (calculado)
+    't_leadLostReasonsId',-- Motivo de pérdida (manejado aparte)
+    't_stateLead',        -- Estado del lead (calculado)
+    't_stateLeadDate',    -- Fecha de estado (auto)
+    't_dateStage',        -- Fecha de etapa (auto)
+    't_userId',           -- Responsable (asignación)
+    't_userName',         -- Nombre de usuario (calculado)
+    't_outbound',         -- Tipo de lead (sistema)
+    't_active'            -- Activo/inactivo (sistema)
+);
+GO
+
+-- ════════════════════════════════════════════════════════════
+-- ScoringRuleConditions — nuevas columnas para condiciones extendidas
+-- (variables, tiempo de respuesta, fuente de prospecto)
+-- ════════════════════════════════════════════════════════════
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringRuleConditions') AND name = 'ConditionType')
+    ALTER TABLE dbo.ScoringRuleConditions ADD ConditionType NVARCHAR(50) NOT NULL DEFAULT 'answer';
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringRuleConditions') AND name = 'FieldId')
+    ALTER TABLE dbo.ScoringRuleConditions ADD FieldId INT NULL;
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringRuleConditions') AND name = 'ConditionValue')
+    ALTER TABLE dbo.ScoringRuleConditions ADD ConditionValue NVARCHAR(500) NULL;
+GO
+
+-- QuestionId y AnswerOptionId ahora son nullable (solo aplican a type='answer')
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringRuleConditions') AND name = 'QuestionId'
+           AND is_nullable = 0)
+BEGIN
+    ALTER TABLE dbo.ScoringRuleConditions ALTER COLUMN QuestionId INT NULL;
+END
+GO
+
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ScoringRuleConditions') AND name = 'AnswerOptionId'
+           AND is_nullable = 0)
+BEGIN
+    ALTER TABLE dbo.ScoringRuleConditions ALTER COLUMN AnswerOptionId INT NULL;
+END
+GO
+
+-- ============================================================
+-- REDISEÑO LeadLostReasons — ejecutar desde aquí hacia abajo
+--
+-- Estado actual de la BD:
+--   LeadLostReasonsPackages (Id, CustomerId, Description) — un paquete por customer
+--   LeadLostReasons         (Id, LeadLostReasonsPackagesId, Description, ConversionRate, IsActive)
+--   Accounts.LeadLostReasonsPackagesId → LeadLostReasonsPackages.Id
+--
+-- Resultado:
+--   LeadLostReasonTemplates — descripciones únicas del sistema viejo (el admin puede editar después)
+--   LeadLostReasons (nueva) — por cuenta, ligadas a su template de origen
+-- ============================================================
+
+-- PASO 1: Renombrar tabla vieja para liberar el nombre
+IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'LeadLostReasons')
+   AND NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_OldLeadLostReasons')
+BEGIN
+    EXEC sp_rename 'dbo.LeadLostReasons', '_OldLeadLostReasons';
+    PRINT 'OK: LeadLostReasons → _OldLeadLostReasons';
+END
+GO
+
+-- Eliminar AccountLeadLostReasons si existe (ya no se necesita)
+IF EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AccountLeadLostReasons')
+BEGIN
+    DECLARE @fk NVARCHAR(MAX) = '';
+    SELECT @fk += 'ALTER TABLE dbo.AccountLeadLostReasons DROP CONSTRAINT ' + name + '; '
+    FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('AccountLeadLostReasons');
+    IF @fk <> '' EXEC sp_executesql @fk;
+    DROP TABLE dbo.AccountLeadLostReasons;
+    PRINT 'OK: AccountLeadLostReasons eliminada';
+END
+GO
+
+-- PASO 2: Crear LeadLostReasonTemplates (sugerencias que el admin gestiona)
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'LeadLostReasonTemplates')
+BEGIN
+    CREATE TABLE [dbo].[LeadLostReasonTemplates] (
+        [TemplateId]      INT IDENTITY(1,1) NOT NULL,
+        [Description]     NVARCHAR(200)     NOT NULL,
+        [CountsForCharts] BIT               NOT NULL DEFAULT 1,
+        [IsActive]        BIT               NOT NULL DEFAULT 1,
+        CONSTRAINT [PK_LeadLostReasonTemplates] PRIMARY KEY CLUSTERED ([TemplateId] ASC)
+    );
+    PRINT 'OK: LeadLostReasonTemplates creada';
+END
+GO
+
+-- PASO 3: Crear nueva LeadLostReasons por cuenta
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'LeadLostReasons')
+BEGIN
+    CREATE TABLE [dbo].[LeadLostReasons] (
+        [LostReasonId]    INT IDENTITY(1,1) NOT NULL,
+        [AccountId]       INT               NOT NULL,
+        [Description]     NVARCHAR(200)     NOT NULL,
+        [CountsForCharts] BIT               NOT NULL DEFAULT 1,
+        [IsActive]        BIT               NOT NULL DEFAULT 1,
+        CONSTRAINT [PK_LeadLostReasons]          PRIMARY KEY CLUSTERED ([LostReasonId] ASC),
+        CONSTRAINT [FK_LeadLostReasons_Accounts] FOREIGN KEY ([AccountId]) REFERENCES [dbo].[Accounts]([AccountId])
+    );
+    PRINT 'OK: Nueva LeadLostReasons creada';
+END
+GO
+
+-- PASO 4: Insertar templates (sugerencias globales)
+INSERT INTO dbo.LeadLostReasonTemplates (Description, CountsForCharts, IsActive)
+SELECT Description, CountsForCharts, IsActive FROM (VALUES
+    ('Fuera de presupuesto', 1, 1),
+    ('No está interesado',   0, 1),
+    ('Datos incorrectos',    0, 1),
+    ('No se localizó',       0, 1),
+    ('SPAM',                 0, 1)
+) v (Description, CountsForCharts, IsActive)
+WHERE NOT EXISTS (
+    SELECT 1 FROM dbo.LeadLostReasonTemplates t WHERE t.Description = v.Description
+);
+GO
+
+-- PASO 5: Migrar razones a CADA account del customer
+-- Un paquete es por customer → todas las accounts de ese customer heredan las razones
+INSERT INTO dbo.LeadLostReasons (AccountId, Description, CountsForCharts, IsActive)
+SELECT
+    a.AccountId,
+    old.Description,
+    old.ConversionRate,
+    old.IsActive
+FROM dbo.Accounts a
+JOIN dbo.LeadLostReasonsPackages pkg ON pkg.CustomerId = a.CustomerId
+JOIN dbo._OldLeadLostReasons     old ON old.LeadLostReasonsPackagesId = pkg.Id
+WHERE NOT EXISTS (
+    SELECT 1 FROM dbo.LeadLostReasons lr
+    WHERE lr.AccountId = a.AccountId AND lr.Description = old.Description
+);
+PRINT CONCAT('OK: Razones migradas: ', @@ROWCOUNT);
+GO
+
+-- VERIFICACIÓN
+SELECT a.AccountId, a.Name, lr.Description, lr.CountsForCharts
+FROM dbo.LeadLostReasons lr
+JOIN dbo.Accounts a ON a.AccountId = lr.AccountId
+ORDER BY a.AccountId;
+GO
+
+-- ============================================================
+-- LIMPIEZA — ejecutar solo cuando todo se vea bien
+-- ============================================================
+
+-- 1. Quitar FK de Accounts → LeadLostReasonsPackages (si existe)
+DECLARE @fkAccounts NVARCHAR(MAX) = '';
+SELECT @fkAccounts += 'ALTER TABLE dbo.Accounts DROP CONSTRAINT ' + name + '; '
+FROM sys.foreign_keys
+WHERE parent_object_id = OBJECT_ID('dbo.Accounts')
+  AND referenced_object_id = OBJECT_ID('dbo.LeadLostReasonsPackages');
+IF @fkAccounts <> '' EXEC sp_executesql @fkAccounts;
+
+-- 2. Quitar la columna del modelo
+-- ALTER TABLE dbo.Accounts DROP COLUMN LeadLostReasonsPackagesId;
+
+-- 3. Borrar tablas viejas
+-- DROP TABLE dbo._OldLeadLostReasons;
+-- DROP TABLE dbo.LeadLostReasonsPackages;
+GO
+
+-- ============================================================
+-- FUENTES DE PROSPECTOS — ejecutar desde aquí hacia abajo
+-- ============================================================
+
+-- Agregar TikTok que no estaba en el seed original
+INSERT INTO dbo.ProspectSources (Name)
+SELECT 'TikTok' WHERE NOT EXISTS (SELECT 1 FROM dbo.ProspectSources WHERE Name = 'TikTok');
+GO
+
+-- Crear tabla AccountProspectSources (fuentes por cuenta)
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AccountProspectSources')
+BEGIN
+    CREATE TABLE [dbo].[AccountProspectSources] (
+        [Id]        INT IDENTITY(1,1) NOT NULL,
+        [AccountId] INT               NOT NULL,
+        [SourceId]  INT               NOT NULL,
+        CONSTRAINT [PK_AccountProspectSources]          PRIMARY KEY CLUSTERED ([Id] ASC),
+        CONSTRAINT [FK_AccountProspectSources_Accounts] FOREIGN KEY ([AccountId]) REFERENCES [dbo].[Accounts]([AccountId]),
+        CONSTRAINT [FK_AccountProspectSources_Sources]  FOREIGN KEY ([SourceId])  REFERENCES [dbo].[ProspectSources]([SourceId])
+    );
+    PRINT 'OK: AccountProspectSources creada';
+END
+GO
+
+-- Poblar todas las cuentas con todas las fuentes
+INSERT INTO dbo.AccountProspectSources (AccountId, SourceId)
+SELECT a.AccountId, s.SourceId
+FROM dbo.Accounts a
+CROSS JOIN dbo.ProspectSources s
+WHERE NOT EXISTS (
+    SELECT 1 FROM dbo.AccountProspectSources aps
+    WHERE aps.AccountId = a.AccountId AND aps.SourceId = s.SourceId
+);
+PRINT CONCAT('OK: Fuentes cargadas: ', @@ROWCOUNT);
+GO
+
+-- ============================================================
+-- FUNNELS Y STAGES PARA CUENTAS EXISTENTES
+-- ============================================================
+
+-- PASO 1: Agregar columna 'color' a Stages si no existe
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Stages') AND name = 'color')
+BEGIN
+    ALTER TABLE dbo.Stages ADD color NVARCHAR(20) NULL;
+    PRINT 'OK: Columna color agregada a Stages';
+END
+GO
+
+-- PASO 2: Tabla temporal con la paleta de colores del CRM
+--         (gradiente teal oscuro según número total de etapas y posición)
+CREATE TABLE #StageColors (
+    TotalStages INT NOT NULL,
+    Position    INT NOT NULL,
+    Color       NVARCHAR(20) NOT NULL,
+    PRIMARY KEY (TotalStages, Position)
+);
+
+INSERT INTO #StageColors (TotalStages, Position, Color) VALUES
+-- 1 etapa
+(1,1,'#1eb099'),
+-- 2 etapas
+(2,1,'#1eb099'),(2,2,'#0f594d'),
+-- 3 etapas
+(3,1,'#1eb099'),(3,2,'#147565'),(3,3,'#0a3b33'),
+-- 4 etapas
+(4,1,'#1eb099'),(4,2,'#168472'),(4,3,'#0f584d'),(4,4,'#072c26'),
+-- 5 etapas
+(5,1,'#1eb099'),(5,2,'#188c79'),(5,3,'#12695b'),(5,4,'#0c453c'),(5,5,'#06211d'),
+-- 6 etapas
+(6,1,'#1eb099'),(6,2,'#19937f'),(6,3,'#147566'),(6,4,'#0f584d'),(6,5,'#0a3b33'),(6,6,'#051d19'),
+-- 7 etapas
+(7,1,'#1eb099'),(7,2,'#1a9985'),(7,3,'#16806f'),(7,4,'#116659'),(7,5,'#0d4d43'),(7,6,'#09332c'),(7,7,'#041a16'),
+-- 8 etapas
+(8,1,'#1eb099'),(8,2,'#1a9a85'),(8,3,'#178474'),(8,4,'#126e60'),(8,5,'#0f584d'),(8,6,'#0c4239'),(8,7,'#072c25'),(8,8,'#041614'),
+-- 9 etapas
+(9,1,'#1eb099'),(9,2,'#1b9d88'),(9,3,'#188978'),(9,4,'#137667'),(9,5,'#116255'),(9,6,'#0e4f44'),(9,7,'#0a3c32'),(9,8,'#072823'),(9,9,'#041512'),
+-- 10 etapas
+(10,1,'#1eb099'),(10,2,'#1b9e89'),(10,3,'#188c7a'),(10,4,'#147a6b'),(10,5,'#12695b'),(10,6,'#0f574b'),(10,7,'#0b453a'),(10,8,'#09332c'),(10,9,'#06211d'),(10,10,'#031210'),
+-- 11 etapas
+(11,1,'#1eb099'),(11,2,'#1da389'),(11,3,'#1d937d'),(11,4,'#1a8470'),(11,5,'#177563'),(11,6,'#146656'),(11,7,'#12594b'),(11,8,'#0f453b'),(11,9,'#0b362d'),(11,10,'#082620'),(11,11,'#041412'),
+-- 12 etapas
+(12,1,'#1eb099'),(12,2,'#1da389'),(12,3,'#1d937d'),(12,4,'#1a8470'),(12,5,'#177563'),(12,6,'#146656'),(12,7,'#12594b'),(12,8,'#0f493e'),(12,9,'#0c3a31'),(12,10,'#092b24'),(12,11,'#061c17'),(12,12,'#030c0a'),
+-- 13 etapas
+(13,1,'#22bfa1'),(13,2,'#1eb099'),(13,3,'#1da389'),(13,4,'#1d937d'),(13,5,'#1a8470'),(13,6,'#177563'),(13,7,'#146656'),(13,8,'#12594b'),(13,9,'#0f493e'),(13,10,'#0c3a31'),(13,11,'#092b24'),(13,12,'#061c17'),(13,13,'#030c0a'),
+-- 14 etapas
+(14,1,'#27ccac'),(14,2,'#22bfa1'),(14,3,'#1eb099'),(14,4,'#1da389'),(14,5,'#1d937d'),(14,6,'#1a8470'),(14,7,'#177563'),(14,8,'#146656'),(14,9,'#12594b'),(14,10,'#0f493e'),(14,11,'#0c3a31'),(14,12,'#092b24'),(14,13,'#061c17'),(14,14,'#030c0a'),
+-- 15 etapas
+(15,1,'#2bd8b7'),(15,2,'#27ccac'),(15,3,'#22bfa1'),(15,4,'#1eb099'),(15,5,'#1da389'),(15,6,'#1d937d'),(15,7,'#1a8470'),(15,8,'#177563'),(15,9,'#146656'),(15,10,'#12594b'),(15,11,'#0f493e'),(15,12,'#0c3a31'),(15,13,'#092b24'),(15,14,'#061c17'),(15,15,'#030c0a'),
+-- 16 etapas
+(16,1,'#2ee5c2'),(16,2,'#2bd8b7'),(16,3,'#27ccac'),(16,4,'#22bfa1'),(16,5,'#1eb099'),(16,6,'#1da389'),(16,7,'#1d937d'),(16,8,'#1a8470'),(16,9,'#177563'),(16,10,'#146656'),(16,11,'#12594b'),(16,12,'#0f493e'),(16,13,'#0c3a31'),(16,14,'#092b24'),(16,15,'#061c17'),(16,16,'#030c0a'),
+-- 17 etapas
+(17,1,'#33f2cd'),(17,2,'#2ee5c2'),(17,3,'#2bd8b7'),(17,4,'#27ccac'),(17,5,'#22bfa1'),(17,6,'#1eb099'),(17,7,'#1da389'),(17,8,'#1d937d'),(17,9,'#1a8470'),(17,10,'#177563'),(17,11,'#146656'),(17,12,'#12594b'),(17,13,'#0f493e'),(17,14,'#0c3a31'),(17,15,'#092b24'),(17,16,'#061c17'),(17,17,'#030c0a'),
+-- 18 etapas
+(18,1,'#39ffd9'),(18,2,'#33f2cd'),(18,3,'#2ee5c2'),(18,4,'#2bd8b7'),(18,5,'#27ccac'),(18,6,'#22bfa1'),(18,7,'#1eb099'),(18,8,'#1da389'),(18,9,'#1d937d'),(18,10,'#1a8470'),(18,11,'#177563'),(18,12,'#146656'),(18,13,'#12594b'),(18,14,'#0f493e'),(18,15,'#0c3a31'),(18,16,'#092b24'),(18,17,'#061c17'),(18,18,'#030c0a');
+GO
+
+-- PASO 3: Para cada Account sin Funnel → crear Pipeline Principal con 5 etapas
+DECLARE @AccId INT, @FunnelId INT;
+
+DECLARE cur CURSOR FOR
+    SELECT a.AccountId
+    FROM dbo.Accounts a
+    WHERE NOT EXISTS (SELECT 1 FROM dbo.Funnels f WHERE f.AccountId = a.AccountId);
+
+OPEN cur;
+FETCH NEXT FROM cur INTO @AccId;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    INSERT INTO dbo.Funnels (Title, AccountId)
+    VALUES ('Pipeline Principal', @AccId);
+    SET @FunnelId = SCOPE_IDENTITY();
+
+    INSERT INTO dbo.Stages (FunnelId, Title, Position, color) VALUES
+    (@FunnelId, 'Nuevo',      1, '#1eb099'),
+    (@FunnelId, 'Contactado', 2, '#188c79'),
+    (@FunnelId, 'Calificado', 3, '#12695b'),
+    (@FunnelId, 'Propuesta',  4, '#0c453c'),
+    (@FunnelId, 'Cierre',     5, '#06211d');
+
+    PRINT CONCAT('OK: Funnel creado para AccountId=', @AccId);
+    FETCH NEXT FROM cur INTO @AccId;
+END
+
+CLOSE cur;
+DEALLOCATE cur;
+GO
+
+-- PASO 4: Asignar colores de la paleta a etapas existentes sin color
+--         Detecta cuántas etapas tiene el funnel y aplica el gradiente correcto
+;WITH StageRanked AS (
+    SELECT
+        s.Id,
+        s.FunnelId,
+        s.Position,
+        COUNT(*) OVER (PARTITION BY s.FunnelId) AS TotalInFunnel
+    FROM dbo.Stages s
+    WHERE s.color IS NULL OR s.color = ''
+),
+Capped AS (
+    -- Si el funnel tiene más de 18 etapas, usa la paleta de 18 (la más oscura al final)
+    SELECT
+        sr.Id,
+        CASE WHEN sr.TotalInFunnel > 18 THEN 18 ELSE sr.TotalInFunnel END AS TotalStages,
+        CASE WHEN sr.TotalInFunnel > 18
+             THEN CAST(ROUND(CAST(sr.Position AS FLOAT) / sr.TotalInFunnel * 18, 0) AS INT)
+             ELSE sr.Position
+        END AS MappedPosition
+    FROM StageRanked sr
+)
+UPDATE s
+SET s.color = sc.Color
+FROM dbo.Stages s
+JOIN Capped c ON c.Id = s.Id
+JOIN #StageColors sc ON sc.TotalStages = c.TotalStages
+    AND sc.Position = CASE WHEN c.MappedPosition < 1 THEN 1
+                           WHEN c.MappedPosition > c.TotalStages THEN c.TotalStages
+                           ELSE c.MappedPosition END;
+PRINT CONCAT('OK: Colores asignados a etapas existentes: ', @@ROWCOUNT);
+
+DROP TABLE #StageColors;
+GO
+
+-- ============================================================
+-- DEALS DESDE LEADS EXISTENTES
+-- Un Deal por cada Lead que aún no tenga Deal asociado
+-- ============================================================
+
+-- Subquery con la primera etapa de cada funnel por cuenta
+;WITH FirstStage AS (
+    SELECT
+        f.AccountId,
+        s.Id AS StageId,
+        ROW_NUMBER() OVER (PARTITION BY f.AccountId ORDER BY s.Position ASC) AS rn
+    FROM dbo.Funnels f
+    JOIN dbo.Stages s ON s.FunnelId = f.Id
+)
+INSERT INTO dbo.Deals
+    (DealName, AccountId, PrimaryContactId, CompanyId, StageId,
+     Status, DealType, OriginatingLeadId, CreatedOn, ProspectSource, AdName, OriginType)
+SELECT
+    -- Nombre del deal: "Nombre Apellido" del contacto, o fallback al email, o ID
+    COALESCE(
+        NULLIF(LTRIM(RTRIM(ISNULL(c.FirstName,'') + ' ' + ISNULL(c.LastName,''))), ''),
+        c.Email,
+        CONCAT('Lead #', l.LeadId)
+    ),
+    l.AccountId,
+    l.ContactId,
+    c.CompanyId,
+    fs.StageId,
+    -- Mapear status del lead al status del deal
+    CASE l.Status
+        WHEN 'Convertido' THEN 'Ganado'
+        WHEN 'Perdido'    THEN 'Perdido'
+        ELSE                   'Abierto'
+    END,
+    'NewBusiness',
+    l.LeadId,
+    l.CreatedOn,
+    l.ProspectSource,
+    l.AdName,
+    l.OriginType
+FROM dbo.Leads l
+LEFT JOIN dbo.Contacts c ON c.ContactId = l.ContactId
+JOIN FirstStage fs ON fs.AccountId = l.AccountId AND fs.rn = 1
+WHERE
+    -- Solo leads que aún no tengan deal
+    NOT EXISTS (
+        SELECT 1 FROM dbo.Deals d WHERE d.OriginatingLeadId = l.LeadId
+    )
+    AND l.AccountId IS NOT NULL;
+
+PRINT CONCAT('OK: Deals creados desde Leads: ', @@ROWCOUNT);
+GO
+
+-- Asignar Owner del Deal = OwnerUserId del Lead
+INSERT INTO dbo.DealUsers (DealId, UserId, RoleInDeal)
+SELECT d.DealId, l.OwnerUserId, 'Owner'
+FROM dbo.Deals d
+JOIN dbo.Leads l ON l.LeadId = d.OriginatingLeadId
+WHERE
+    l.OwnerUserId IS NOT NULL
+    AND NOT EXISTS (
+        SELECT 1 FROM dbo.DealUsers du
+        WHERE du.DealId = d.DealId AND du.UserId = l.OwnerUserId
+    );
+
+PRINT CONCAT('OK: DealUsers (Owner) asignados: ', @@ROWCOUNT);
+GO
+
+-- VERIFICACIÓN
+SELECT
+    a.AccountId,
+    a.Name AS Cuenta,
+    f.Id   AS FunnelId,
+    f.Title AS Embudo,
+    COUNT(DISTINCT s.Id) AS NumEtapas,
+    COUNT(DISTINCT d.DealId) AS NumDeals
+FROM dbo.Accounts a
+LEFT JOIN dbo.Funnels f ON f.AccountId = a.AccountId
+LEFT JOIN dbo.Stages  s ON s.FunnelId  = f.Id
+LEFT JOIN dbo.Deals   d ON d.AccountId = a.AccountId
+GROUP BY a.AccountId, a.Name, f.Id, f.Title
+ORDER BY a.AccountId;
+GO
+
+-- ####################################################################
+-- ### MÓDULO WHATSAPP — Adaptación a tablas existentes (idempotente)
+-- ### Las tablas ContactsWhatsapps, MessagesWhatsapps, SavedResponseWhatsapps
+-- ### ya existen en producción con datos. Solo agregamos columnas faltantes.
+-- ### NO usar dotnet ef migrations add. Ejecutar con SSMS / Azure Data Studio.
+-- ####################################################################
+
+-- ── 1. Customers: TwoChatApiKey (nueva; hasWhatsApp ya existe con ese nombre exacto) ──
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Customers') AND name = N'TwoChatApiKey')
+    ALTER TABLE dbo.Customers ADD TwoChatApiKey NVARCHAR(200) NULL;
+GO
+-- Activar hasWhatsApp para customers que ya tenían configuración
+UPDATE dbo.Customers SET hasWhatsApp = 1
+WHERE (WhatsappChannel IS NOT NULL OR WhatsappNumber IS NOT NULL) AND (hasWhatsApp IS NULL OR hasWhatsApp = 0);
+GO
+-- Para habilitar manualmente: UPDATE dbo.Customers SET hasWhatsApp = 1 WHERE id = <id>;
+
+-- ── 2. ContactsWhatsapps: agregar columnas nuevas ─────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.ContactsWhatsapps') AND name = N'AccountId')
+    ALTER TABLE dbo.ContactsWhatsapps ADD AccountId INT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.ContactsWhatsapps') AND name = N'LinkedContactId')
+    ALTER TABLE dbo.ContactsWhatsapps ADD LinkedContactId INT NULL;
+GO
+
+-- ── 3. FK: ContactsWhatsapps.LinkedContactId → Contacts.ContactId ─────────
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_ContactsWhatsapps_LinkedContact')
+    ALTER TABLE dbo.ContactsWhatsapps ADD CONSTRAINT FK_ContactsWhatsapps_LinkedContact
+        FOREIGN KEY (LinkedContactId) REFERENCES dbo.Contacts(ContactId) ON DELETE NO ACTION;
+GO
+
+-- NOTA: Las tablas MessagesWhatsapps y SavedResponseWhatsapps ya existen
+-- en producción y NO deben recrearse. El modelo C# ahora apunta a esos
+-- nombres correctos (con 's' al final). No crear MessagesWhatsapp ni
+-- SavedResponseWhatsapp (sin 's') — esas versiones ya no se usan.
+
+-- ── 4. Customers: columnas para almacenar IDs de webhooks de 2Chat ────────
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Customers') AND name = N'WebhookReceiveId')
+    ALTER TABLE dbo.Customers ADD WebhookReceiveId NVARCHAR(100) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Customers') AND name = N'WebhookSentId')
+    ALTER TABLE dbo.Customers ADD WebhookSentId NVARCHAR(100) NULL;
+GO
+
+-- ============================================================
+-- FLUJO DE LEADS — Fase CRM
+-- Asegurar columnas en Contacts para calificación y conversión
+-- ============================================================
+
+-- Contacts: LifecycleStatus (etapa del ciclo de vida del contacto)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Contacts') AND name = N'LifecycleStatus')
+    ALTER TABLE dbo.Contacts ADD LifecycleStatus NVARCHAR(50) NULL;
+GO
+
+-- Contacts: PostalCode
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Contacts') AND name = N'PostalCode')
+    ALTER TABLE dbo.Contacts ADD PostalCode NVARCHAR(20) NULL;
+GO
+
+-- Leads: LifecycleStatus (para tracking del ciclo)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Leads') AND name = N'LifecycleStatus')
+    ALTER TABLE dbo.Leads ADD LifecycleStatus NVARCHAR(50) NULL;
+GO
+
+-- Leads: StageId (stage en kanban de prospectos, si aplica)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Leads') AND name = N'StageId')
+    ALTER TABLE dbo.Leads ADD StageId INT NULL;
+GO
+
+-- Leads: LeadLostReasonsId
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Leads') AND name = N'LeadLostReasonsId')
+    ALTER TABLE dbo.Leads ADD LeadLostReasonsId INT NULL;
+GO
+
+-- Leads: ProspectSourceId (FK normalizada)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Leads') AND name = N'ProspectSourceId')
+    ALTER TABLE dbo.Leads ADD ProspectSourceId INT NULL;
 GO

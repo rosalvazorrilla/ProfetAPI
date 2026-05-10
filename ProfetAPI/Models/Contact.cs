@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ProfetAPI.Models;
 
@@ -15,11 +16,16 @@ public class Contact
 
     public string? PhoneNumber { get; set; }
     public string? Position { get; set; }
-    public long? OriginatingLeadId { get; set; }
 
     public DateTime CreatedOn { get; set; }
-    public DateTime ModifiedOn { get; set; }
-    public bool IsWhatsappContact { get; set; } // <-- CAMPO AÑADIDO
+    public DateTime? ModifiedOn { get; set; }
+
+    public string? LifecycleStatus { get; set; }
+    public string? PostalCode { get; set; }
+
+    // ── WhatsApp ──────────────────────────────────────────────────────
+    /// <summary>true = este contacto llegó / está en el canal de WhatsApp</summary>
+    public bool IsWhatsappContact { get; set; } = false;
 
     // Propiedades de navegación
     public virtual Company? Company { get; set; }

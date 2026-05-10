@@ -1,11 +1,3 @@
+// Este archivo se mantiene vacío — la tabla AccountLeadLostReasons fue reemplazada
+// por LeadLostReasons (por cuenta). Ver LeadLostReason.cs y LeadLostReasonTemplate.cs.
 namespace ProfetAPI.Models;
-
-/// <summary>Junction: qué motivos de pérdida habilitó cada Account.</summary>
-public class AccountLeadLostReason
-{
-    public int AccountId { get; set; }
-    public int LostReasonId { get; set; }
-
-    public virtual Account Account { get; set; } = null!;
-    public virtual LeadLostReason LeadLostReason { get; set; } = null!;
-}

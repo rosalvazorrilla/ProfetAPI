@@ -33,7 +33,7 @@ public class UpdateFunnelTemplateDto
 public class FunnelTemplateResponseDto
 {
     [SwaggerSchema("ID de la plantilla.")]
-    public int TemplateId { get; set; }
+    public int Id { get; set; }
 
     [SwaggerSchema("Nombre de la plantilla.")]
     public string Name { get; set; } = null!;
@@ -61,7 +61,13 @@ public class UpsertFunnelTemplateStageDto
 
 public class FunnelTemplateStageResponseDto
 {
-    public int TemplateStageId { get; set; }
-    public string StageName { get; set; } = null!;
+    public int Id { get; set; }
+    public string Name { get; set; } = null!;
+    public int Order { get; set; }
+}
+
+public class ReorderStageDto
+{
+    public int StageId { get; set; }
     public int Order { get; set; }
 }

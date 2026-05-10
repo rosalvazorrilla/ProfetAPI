@@ -5,6 +5,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using Microsoft.OpenApi.Models; // Necesario para OpenApiInfo
 using ProfetAPI.Data;
+using ProfetAPI.Hubs;
 using ProfetAPI.Models;
 using System.Reflection; // <--- AGREGA ESTO (Necesario para leer el XML)
 using System.Text;
@@ -12,17 +13,17 @@ using System.Text;
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
-// --- 1. Conexión a la Base de Datos ---
+// --- 1. Conexiï¿½n a la Base de Datos ---
 var connectionString = configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
 
-// --- 2. Configuración de Identity ---
+// --- 2. Configuraciï¿½n de Identity ---
 builder.Services.AddIdentity<ApplicationUser, ApplicationRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders();
 
-// --- 3. Configuración de Autenticación JWT ---
+// --- 3. Configuraciï¿½n de Autenticaciï¿½n JWT ---
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -41,35 +42,57 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = builder.Configuration["JWT:ValidIssuer"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["JWT:Secret"]))
     };
+    // SignalR pasa el token por query string (?access_token=...)
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+                context.Token = accessToken;
+            return Task.CompletedTask;
+        }
+    };
 });
 
-// --- 4. Configuración de CORS ---
+// --- 4. Configuraciï¿½n de CORS ---
+// SetIsOriginAllowed permite cualquier origen pero con AllowCredentials,
+// que SignalR necesita para WebSockets (AllowAnyOrigin() + AllowCredentials() son incompatibles).
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+        policy.SetIsOriginAllowed(_ => true)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 
-// --- 5. Servicios de Controladores y Swagger (MODIFICADO) ---
+// --- 5. HttpClient para llamadas a 2Chat API ---
+builder.Services.AddHttpClient();
+builder.Services.AddScoped<ProfetAPI.Services.TwoChatService>();
+
+// --- 5b. Servicios de Controladores, SignalR y Swagger ---
+builder.Services.AddSignalR();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
 builder.Services.AddSwaggerGen(c =>
 {
-    // A. Información Básica
+    // A. Informaciï¿½n Bï¿½sica
     c.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "Profet API",
         Version = "v1",
-        Description = "API Backend para gestión comercial y referidos."
+        Description = "API Backend para gestiï¿½n comercial y referidos."
     });
 
-    // B. Habilitar Anotaciones (Títulos y descripciones en controladores)
+    // B. Habilitar Anotaciones (Tï¿½tulos y descripciones en controladores)
     c.EnableAnnotations();
 
-    // C. Configurar Seguridad JWT (El botón del candado)
+    // C. Configurar Seguridad JWT (El botï¿½n del candado)
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Description = "JWT Authorization header using the Bearer scheme. \r\n\r\n Enter 'Bearer' [space] and then your token.\r\n\r\nExample: \"Bearer 12345abcdef\"",
@@ -98,7 +121,7 @@ builder.Services.AddSwaggerGen(c =>
     });
 
     // D. Integrar comentarios XML (Para que el front lea tus explicaciones)
-    // NOTA: Asegúrate de haber hecho el paso del .csproj antes de correr esto
+    // NOTA: Asegï¿½rate de haber hecho el paso del .csproj antes de correr esto
     var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     c.IncludeXmlComments(xmlPath);
@@ -114,7 +137,7 @@ app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Profet API v1");
-    c.RoutePrefix = string.Empty; // Opcional: Esto pone Swagger en la página principal
+    c.RoutePrefix = string.Empty; // Opcional: Esto pone Swagger en la pï¿½gina principal
 });
 
 if (app.Environment.IsDevelopment())
@@ -124,13 +147,17 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-// CORS
-app.UseCors(x => x.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+// Archivos estÃ¡ticos (logos, favicons subidos por clientes)
+app.UseStaticFiles();
+
+// CORS â€” usa la polÃ­tica definida arriba (SetIsOriginAllowed + AllowCredentials)
+app.UseCors();
 
 // AUTH
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<WhatsAppHub>("/hubs/whatsapp");
 
 app.Run();
