@@ -16,6 +16,15 @@ public class Activity
     public long? EntityId { get; set; }
     public string? EntityType { get; set; }
 
+    // ── Campos para el módulo de Tareas ──────────────────────
+    public int? AccountId { get; set; }
+    public string? Priority { get; set; }           // Alta / Media / Baja
+    public string? TaskStatus { get; set; }         // Pendiente / En progreso / Completada / Cancelada
+    public string? AssignedToUserId { get; set; }   // usuario responsable de ejecutar la tarea
+    public DateTime? DueDate { get; set; }          // fecha límite
+    public DateTime CreatedOn { get; set; } = DateTime.UtcNow;
+
     public virtual ApplicationUser? OwnerUser { get; set; }
+    public virtual ApplicationUser? AssignedToUser { get; set; }
     public virtual CallDetail? CallDetail { get; set; }
 }

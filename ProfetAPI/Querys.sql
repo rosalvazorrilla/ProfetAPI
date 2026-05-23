@@ -2413,3 +2413,42 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Leads') AND name = N'ProspectSourceId')
     ALTER TABLE dbo.Leads ADD ProspectSourceId INT NULL;
 GO
+
+-- ============================================================
+-- TAREAS — Ampliar Activities para soportar el módulo de tareas
+-- ============================================================
+
+-- Activities: AccountId (aislamiento multi-tenant)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'AccountId')
+    ALTER TABLE dbo.Activities ADD AccountId INT NULL;
+GO
+
+-- Activities: Priority (Alta / Media / Baja)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'Priority')
+    ALTER TABLE dbo.Activities ADD Priority NVARCHAR(20) NULL;
+GO
+
+-- Activities: TaskStatus (Pendiente / En progreso / Completada / Cancelada)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'TaskStatus')
+    ALTER TABLE dbo.Activities ADD TaskStatus NVARCHAR(30) NULL;
+GO
+
+-- Activities: AssignedToUserId (quién debe hacer la tarea, distinto del owner/creador)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'AssignedToUserId')
+    ALTER TABLE dbo.Activities ADD AssignedToUserId NVARCHAR(128) NULL;
+GO
+
+-- Activities: DueDate (fecha límite específica, separada de ActivityDate)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'DueDate')
+    ALTER TABLE dbo.Activities ADD DueDate DATETIME2 NULL;
+GO
+
+-- Activities: CreatedOn
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'CreatedOn')
+    ALTER TABLE dbo.Activities ADD CreatedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE();
+GO
+
+-- Índice para buscar tareas por cuenta rápidamente
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'IX_Activities_AccountId_Type')
+    CREATE INDEX IX_Activities_AccountId_Type ON dbo.Activities (AccountId, ActivityType);
+GO
