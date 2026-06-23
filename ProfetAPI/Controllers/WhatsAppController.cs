@@ -405,7 +405,7 @@ public class WhatsAppController : ControllerBase
     public async Task<IActionResult> GetWhatsAppCustomers()
     {
         var list = await _db.Customers
-            .Where(c => c.HasWhatsApp && (c.Deleted == null || c.Deleted == false))
+            .Where(c => c.HasWhatsApp == true && (c.Deleted == null || c.Deleted == false))
             .OrderBy(c => c.Name)
             .Select(c => new { c.Id, c.Name, c.WhatsappNumber, c.WhatsappChannel, c.Active })
             .ToListAsync();
@@ -676,7 +676,7 @@ public class WhatsAppController : ControllerBase
 
         var contactIds = leadsContactIds.Union(dealsContactIds).Distinct();
 
-        var query = _db.Contacts.Where(c => contactIds.Contains(c.ContactId) && !c.IsWhatsappContact);
+        var query = _db.Contacts.Where(c => contactIds.Contains(c.ContactId) && c.IsWhatsappContact != true);
 
         if (!string.IsNullOrWhiteSpace(q))
         {

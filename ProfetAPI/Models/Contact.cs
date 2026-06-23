@@ -25,7 +25,7 @@ public class Contact
 
     // ── WhatsApp ──────────────────────────────────────────────────────
     /// <summary>true = este contacto llegó / está en el canal de WhatsApp</summary>
-    public bool IsWhatsappContact { get; set; } = false;
+    public bool? IsWhatsappContact { get; set; } = false;
 
     // Propiedades de navegación
     public virtual Company? Company { get; set; }

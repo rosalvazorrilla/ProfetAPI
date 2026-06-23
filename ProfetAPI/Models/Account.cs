@@ -31,6 +31,23 @@ public class Account
     public string Status { get; set; } = "Por Iniciar";
     public DateTime CreatedOn { get; set; } = DateTime.UtcNow;
 
+    // ── Add-on: Correo saliente propio ───────────────────────────────────────
+    /// <summary>
+    /// true = el add-on "Email Propio" está activo para esta cuenta.
+    /// Cuando es true, los correos salen desde SmtpFromAddress en lugar de la cuenta global de Profet.
+    /// </summary>
+    public bool? SmtpEnabled     { get; set; } = false;
+    public string? SmtpHost      { get; set; }   // ej: smtp.sendgrid.net / smtp.gmail.com
+    public int?    SmtpPort      { get; set; }   // 587 / 465 / 25
+    public string? SmtpUser      { get; set; }
+    public string? SmtpPassword  { get; set; }   // TODO: cifrar en producción
+    public string? SmtpFromAddress { get; set; } // ej: ventas@miempresa.com
+    public string? SmtpFromName    { get; set; } // ej: Equipo de Ventas
+    public bool?   SmtpEnableSsl   { get; set; } = true;
+    public bool?   SmtpIsVerified  { get; set; } = false;  // true tras enviar correo de prueba exitoso
+    public DateTime? SmtpVerifiedAt { get; set; }
+    public string? SmtpLastError   { get; set; }
+
     // Propiedades de navegación
     public virtual Customer Customer { get; set; } = null!;
     public virtual ICollection<AccountInternalUser> InternalUsers { get; set; } = new List<AccountInternalUser>();

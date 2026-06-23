@@ -74,6 +74,12 @@ builder.Services.AddCors(options =>
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<ProfetAPI.Services.TwoChatService>();
 
+// --- 5c. Servicio de Email ---
+builder.Services.AddScoped<ProfetAPI.Services.IEmailService, ProfetAPI.Services.EmailService>();
+
+// --- 5d. Servicio de Webhooks Salientes ---
+builder.Services.AddScoped<ProfetAPI.Services.IWebhookDispatcherService, ProfetAPI.Services.WebhookDispatcherService>();
+
 // --- 5b. Servicios de Controladores, SignalR y Swagger ---
 builder.Services.AddSignalR();
 builder.Services.AddControllers();

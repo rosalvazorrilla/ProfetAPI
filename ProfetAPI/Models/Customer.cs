@@ -65,7 +65,7 @@ public class Customer
 
     /// <summary>true = el canal de WhatsApp está habilitado para este tenant.</summary>
     [Column("hasWhatsApp")]
-    public bool HasWhatsApp { get; set; } = false;
+    public bool? HasWhatsApp { get; set; } = false;
 
     /// <summary>Número de WhatsApp Business conectado a 2chat (sin '+', ej: 528181818181)</summary>
     [Column("WhatsappNumber")]

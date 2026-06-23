@@ -2415,6 +2415,96 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Leads
 GO
 
 -- ============================================================
+-- FIX: Columnas bool con NULL en registros existentes
+-- EF Core lanza SqlNullValueException al leer NULL en bool no-nullable
+-- ============================================================
+
+-- Customers.hasWhatsApp — rellenar NULLs con 0 (false)
+UPDATE dbo.Customers SET hasWhatsApp = 0 WHERE hasWhatsApp IS NULL;
+GO
+
+-- Contacts.IsWhatsappContact — rellenar NULLs con 0 (false)
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Contacts') AND name = N'IsWhatsappContact')
+    UPDATE dbo.Contacts SET IsWhatsappContact = 0 WHERE IsWhatsappContact IS NULL;
+GO
+
+-- MessagesWhatsapp.IsRead — rellenar NULLs con 0
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.MessagesWhatsapp') AND name = N'IsRead')
+    UPDATE dbo.MessagesWhatsapp SET IsRead = 0 WHERE IsRead IS NULL;
+GO
+
+-- ============================================================
+-- ADD-ON: EMAIL PROPIO — Config SMTP por Account
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpEnabled')
+    ALTER TABLE dbo.Accounts ADD SmtpEnabled BIT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpHost')
+    ALTER TABLE dbo.Accounts ADD SmtpHost NVARCHAR(200) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpPort')
+    ALTER TABLE dbo.Accounts ADD SmtpPort INT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpUser')
+    ALTER TABLE dbo.Accounts ADD SmtpUser NVARCHAR(200) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpPassword')
+    ALTER TABLE dbo.Accounts ADD SmtpPassword NVARCHAR(500) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpFromAddress')
+    ALTER TABLE dbo.Accounts ADD SmtpFromAddress NVARCHAR(320) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpFromName')
+    ALTER TABLE dbo.Accounts ADD SmtpFromName NVARCHAR(200) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpEnableSsl')
+    ALTER TABLE dbo.Accounts ADD SmtpEnableSsl BIT NULL DEFAULT 1;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpIsVerified')
+    ALTER TABLE dbo.Accounts ADD SmtpIsVerified BIT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpVerifiedAt')
+    ALTER TABLE dbo.Accounts ADD SmtpVerifiedAt DATETIME2 NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Accounts') AND name = N'SmtpLastError')
+    ALTER TABLE dbo.Accounts ADD SmtpLastError NVARCHAR(MAX) NULL;
+GO
+
+-- ============================================================
+-- EMAIL LOG — Historial de correos enviados desde el CRM
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID(N'dbo.EmailLogs'))
+BEGIN
+    CREATE TABLE dbo.EmailLogs (
+        EmailLogId    INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        AccountId     INT NULL,
+        LeadId        INT NULL,
+        DealId        INT NULL,
+        ContactId     INT NULL,
+        SentByUserId  NVARCHAR(128) NULL,
+        ToAddress     NVARCHAR(320) NOT NULL,
+        CcAddress     NVARCHAR(320) NULL,
+        Subject       NVARCHAR(500) NOT NULL,
+        BodyHtml      NVARCHAR(MAX) NOT NULL,
+        SentAt        DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        IsSuccess     BIT NOT NULL DEFAULT 1,
+        ErrorMessage  NVARCHAR(MAX) NULL,
+
+        CONSTRAINT FK_EmailLogs_Users
+            FOREIGN KEY (SentByUserId) REFERENCES dbo.Users(Id)
+    );
+
+    -- Índices para consultas frecuentes por entidad
+    CREATE INDEX IX_EmailLogs_AccountId ON dbo.EmailLogs (AccountId, SentAt DESC);
+    CREATE INDEX IX_EmailLogs_LeadId    ON dbo.EmailLogs (LeadId)    WHERE LeadId IS NOT NULL;
+    CREATE INDEX IX_EmailLogs_DealId    ON dbo.EmailLogs (DealId)    WHERE DealId IS NOT NULL;
+    CREATE INDEX IX_EmailLogs_ContactId ON dbo.EmailLogs (ContactId) WHERE ContactId IS NOT NULL;
+END
+GO
+
+-- ============================================================
 -- TAREAS — Ampliar Activities para soportar el módulo de tareas
 -- ============================================================
 
@@ -2451,4 +2541,69 @@ GO
 -- Índice para buscar tareas por cuenta rápidamente
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.Activities') AND name = N'IX_Activities_AccountId_Type')
     CREATE INDEX IX_Activities_AccountId_Type ON dbo.Activities (AccountId, ActivityType);
+GO
+
+
+-- ============================================================
+-- WEBHOOKS — Entrantes y Salientes por cuenta
+-- ============================================================
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID(N'dbo.AccountWebhooks'))
+BEGIN
+    CREATE TABLE dbo.AccountWebhooks (
+        WebhookId    INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        AccountId    INT NOT NULL,
+        Name         NVARCHAR(200) NOT NULL,
+
+        -- 'Incoming' | 'Outgoing'
+        Direction    NVARCHAR(20)  NOT NULL DEFAULT 'Incoming',
+
+        -- Entrante — plataforma de origen
+        -- 'MetaLeadAds' | 'TikTokLeadGen' | 'GoogleLeads' | 'CustomHttp'
+        Platform     NVARCHAR(50)  NULL,
+
+        -- Entrante — acción al recibir
+        -- 'CreateLead' | 'CreateContact' | 'CreateCompany' | 'LogOnly'
+        ActionType   NVARCHAR(50)  NULL DEFAULT 'CreateLead',
+
+        -- Entrante — URL key único
+        WebhookKey   NVARCHAR(64)  NULL,
+
+        -- Entrante — configuración Meta
+        MetaAppId           NVARCHAR(200) NULL,
+        MetaAppSecret       NVARCHAR(500) NULL,
+        MetaVerifyToken     NVARCHAR(200) NULL,
+        MetaPageAccessToken NVARCHAR(MAX) NULL,
+        MetaPageId          NVARCHAR(100) NULL,
+
+        -- Entrante — destino en Profet
+        DestFunnelId   INT          NULL,
+        DestLeadStatus NVARCHAR(50) NULL DEFAULT 'Nuevo',
+
+        -- Saliente — evento disparador
+        -- 'LeadCreated' | 'LeadUpdated' | 'LeadStatusChanged' | 'ContactCreated' | 'DealCreated' | 'DealWon' | 'DealLost' | 'TaskCreated'
+        TriggerEvent   NVARCHAR(100) NULL,
+
+        -- Saliente — URL destino
+        TargetUrl      NVARCHAR(500) NULL,
+        OutgoingSecret NVARCHAR(300) NULL,
+
+        -- Estado y métricas
+        IsActive         BIT       NOT NULL DEFAULT 1,
+        CreatedAt        DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        LastTriggeredAt  DATETIME2 NULL,
+        TriggerCount     INT       NOT NULL DEFAULT 0,
+        LastError        NVARCHAR(MAX) NULL,
+
+        CONSTRAINT FK_AccountWebhooks_Accounts
+            FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId)
+    );
+    CREATE INDEX IX_AccountWebhooks_AccountId ON dbo.AccountWebhooks (AccountId);
+    CREATE UNIQUE INDEX UX_AccountWebhooks_WebhookKey ON dbo.AccountWebhooks (WebhookKey) WHERE WebhookKey IS NOT NULL;
+END
+GO
+
+-- Insertar el webhook de Meta con los valores ya generados (ajusta AccountId)
+-- INSERT INTO dbo.AccountWebhooks (AccountId, Name, Direction, Platform, ActionType, WebhookKey, MetaVerifyToken, DestLeadStatus, IsActive, CreatedAt, TriggerCount)
+-- VALUES (1, 'Leads Facebook', 'Incoming', 'MetaLeadAds', 'CreateLead', '09c0e03b92198732795c755acdae7ac8', '3fa90349b9ce903050348a6e5a429eaaeec811f8', 'Nuevo', 1, GETUTCDATE(), 0);
 GO

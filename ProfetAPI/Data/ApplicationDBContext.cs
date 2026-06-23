@@ -105,6 +105,12 @@ namespace ProfetAPI.Data
         public DbSet<ReportShareLink> ReportShareLinks { get; set; } = null!;
         public DbSet<SharedWidget> SharedWidgets { get; set; } = null!;
 
+        // --- DBSETS PARA EMAIL LOG ---
+        public DbSet<EmailLog> EmailLogs { get; set; } = null!;
+
+        // --- DBSETS PARA WEBHOOKS ---
+        public DbSet<AccountWebhook> AccountWebhooks { get; set; } = null!;
+
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
 
