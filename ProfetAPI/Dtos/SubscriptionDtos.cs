@@ -182,6 +182,9 @@ namespace ProfetAPI.Dtos
         [SwaggerSchema("Nuevo estatus: 'Active' | 'Trialing' | 'Canceled'.")]
         public string? Status { get; set; }
 
+        [SwaggerSchema("Fecha fin de periodo de prueba.")]
+        public DateTime? TrialEndDate { get; set; }
+
         [SwaggerSchema("Reemplaza TODOS los overrides actuales con esta lista.")]
         public List<FeatureOverrideDto>? FeatureOverrides { get; set; }
 

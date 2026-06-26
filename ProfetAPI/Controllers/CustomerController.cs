@@ -303,11 +303,12 @@ namespace ProfetAPI.Controllers
 
         [HttpPut("{id}/subscription")]
         [SwaggerOperation(
-            Summary = "Modificar suscripción del cliente",
-            Description = "Permite cambiar plan, precio, ciclo, overrides y AddOns. Los overrides y AddOns se reemplazan completamente si se envían (omitir para no modificarlos)."
+            Summary = "Crear o modificar suscripción del cliente",
+            Description = "Upsert: si el cliente no tiene suscripción la crea (requiere PlanId); si ya tiene, la actualiza. Los overrides y AddOns se reemplazan completamente si se envían."
         )]
-        [SwaggerResponse(200, "Suscripción actualizada", typeof(SubscriptionDetailDto))]
-        [SwaggerResponse(404, "Cliente o suscripción no encontrados")]
+        [SwaggerResponse(200, "Suscripción guardada", typeof(SubscriptionDetailDto))]
+        [SwaggerResponse(400, "PlanId requerido al crear")]
+        [SwaggerResponse(404, "Cliente no encontrado")]
         public async Task<IActionResult> UpdateSubscription(int id, [FromBody] UpdateSubscriptionDto model)
         {
             var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
@@ -319,18 +320,39 @@ namespace ProfetAPI.Controllers
                 .Include(s => s.PurchasedAddOns)
                 .FirstOrDefaultAsync(s => s.CustomerId == id && s.Status != "Canceled");
 
-            if (subscription == null)
-                return NotFound(new { message = "El cliente no tiene suscripción activa." });
-
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
-                // Actualizar campos básicos
-                if (model.PlanId.HasValue) subscription.PlanId = model.PlanId.Value;
-                if (!string.IsNullOrEmpty(model.BillingCycle)) subscription.BillingCycle = model.BillingCycle;
-                if (model.PriceAgreed.HasValue) subscription.PriceAgreed = model.PriceAgreed.Value;
-                if (model.DiscountAmount.HasValue) subscription.DiscountAmount = model.DiscountAmount.Value;
-                if (!string.IsNullOrEmpty(model.Status)) subscription.Status = model.Status;
+                if (subscription == null)
+                {
+                    // Crear nueva suscripción
+                    if (!model.PlanId.HasValue)
+                        return BadRequest(new { message = "PlanId es requerido para crear una suscripción." });
+
+                    subscription = new Subscription
+                    {
+                        CustomerId = id,
+                        PlanId = model.PlanId.Value,
+                        BillingCycle = model.BillingCycle ?? "Monthly",
+                        PriceAgreed = model.PriceAgreed ?? 0,
+                        DiscountAmount = model.DiscountAmount ?? 0,
+                        Status = model.Status ?? "Active",
+                        SubscriptionStartDate = DateTime.UtcNow,
+                        TrialEndDate = model.TrialEndDate
+                    };
+                    _context.Subscriptions.Add(subscription);
+                    await _context.SaveChangesAsync();
+                }
+                else
+                {
+                    // Actualizar campos básicos
+                    if (model.PlanId.HasValue) subscription.PlanId = model.PlanId.Value;
+                    if (!string.IsNullOrEmpty(model.BillingCycle)) subscription.BillingCycle = model.BillingCycle;
+                    if (model.PriceAgreed.HasValue) subscription.PriceAgreed = model.PriceAgreed.Value;
+                    if (model.DiscountAmount.HasValue) subscription.DiscountAmount = model.DiscountAmount.Value;
+                    if (!string.IsNullOrEmpty(model.Status)) subscription.Status = model.Status;
+                    if (model.TrialEndDate.HasValue) subscription.TrialEndDate = model.TrialEndDate;
+                }
 
                 // Reemplazar overrides si se envían
                 if (model.FeatureOverrides != null)
@@ -376,7 +398,7 @@ namespace ProfetAPI.Controllers
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                return StatusCode(500, new { message = "Error al actualizar la suscripción.", details = ex.Message });
+                return StatusCode(500, new { message = "Error al guardar la suscripción.", details = ex.Message });
             }
         }
     }
