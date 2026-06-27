@@ -85,6 +85,12 @@ public class Customer
     /// <summary>UUID del webhook de 2Chat para mensajes enviados (para poder desuscribirse)</summary>
     public string? WebhookSentId { get; set; }
 
+    // --- INTEGRACIÓN META / FACEBOOK ---
+
+    /// <summary>true = Profet gestiona las campañas de Meta para este cliente.</summary>
+    [Column("MetaManagedByUs")]
+    public bool MetaManagedByUs { get; set; } = false;
+
     // --- Propiedades de navegación ---
     // Un cliente tiene muchos usuarios y muchos equipos.
     public virtual ICollection<ApplicationUser> Users { get; set; } = new List<ApplicationUser>();

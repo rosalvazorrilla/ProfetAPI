@@ -63,6 +63,8 @@ public class WebhooksController : ControllerBase
                 w.IsActive,
                 w.MetaAppId,
                 w.MetaPageId,
+                w.MetaFormId,
+                w.MetaFormName,
                 w.MetaVerifyToken,
                 w.DestFunnelId,
                 w.DestLeadStatus,
@@ -196,6 +198,8 @@ public class WebhooksController : ControllerBase
         MetaVerifyToken      = r.MetaVerifyToken?.Trim() ?? (r.Direction == "Incoming" ? Guid.NewGuid().ToString("N") : null),
         MetaPageAccessToken  = r.MetaPageAccessToken?.Trim(),
         MetaPageId           = r.MetaPageId?.Trim(),
+        MetaFormId           = r.MetaFormId?.Trim(),
+        MetaFormName         = r.MetaFormName?.Trim(),
         DestFunnelId         = r.DestFunnelId,
         DestLeadStatus       = r.DestLeadStatus ?? "Nuevo",
         // Outgoing
@@ -220,6 +224,8 @@ public class WebhooksController : ControllerBase
         if (r.MetaVerifyToken      != null) wh.MetaVerifyToken      = r.MetaVerifyToken.Trim();
         if (r.MetaPageAccessToken  != null) wh.MetaPageAccessToken  = r.MetaPageAccessToken.Trim();
         if (r.MetaPageId           != null) wh.MetaPageId           = r.MetaPageId.Trim();
+        if (r.MetaFormId           != null) wh.MetaFormId           = r.MetaFormId.Trim();
+        if (r.MetaFormName         != null) wh.MetaFormName         = r.MetaFormName.Trim();
 
         if (r.TriggerEvent   != null) wh.TriggerEvent   = r.TriggerEvent.Trim();
         if (r.TargetUrl      != null) wh.TargetUrl      = r.TargetUrl.Trim();
@@ -229,7 +235,7 @@ public class WebhooksController : ControllerBase
     private static object ToDto(AccountWebhook w) => new
     {
         w.WebhookId, w.AccountId, w.Name, w.Direction, w.Platform, w.ActionType,
-        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaVerifyToken,
+        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaFormId, w.MetaFormName, w.MetaVerifyToken,
         w.DestFunnelId, w.DestLeadStatus,
         w.TriggerEvent, w.TargetUrl,
         w.IsActive, w.CreatedAt, w.LastTriggeredAt, w.TriggerCount, w.LastError,
@@ -253,6 +259,8 @@ public record SaveWebhookRequest(
     string? MetaVerifyToken     = null,
     string? MetaPageAccessToken = null,
     string? MetaPageId          = null,
+    string? MetaFormId          = null,
+    string? MetaFormName        = null,
     int?    DestFunnelId        = null,
     string? DestLeadStatus      = "Nuevo",
     // Outgoing
