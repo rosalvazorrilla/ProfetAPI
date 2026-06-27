@@ -2621,3 +2621,45 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.Custo
     ALTER TABLE dbo.Customers ADD MetaManagedByUs BIT NOT NULL DEFAULT 0;
 GO
 
+-- ============================================================
+-- MIGRACIÓN: Marcar clientes legacy como setup completado
+-- Aplica a clientes que ya tienen cuentas configuradas en el
+-- sistema viejo y no necesitan pasar por el Setup Wizard.
+-- Equivale a haber ejecutado POST /api/setup/complete.
+-- ============================================================
+
+-- 1. Activar las cuentas de clientes legacy (Borrador → Activo)
+UPDATE dbo.Accounts
+SET Status = 'Activo'
+WHERE Status != 'Activo'
+  AND CustomerId IN (
+      SELECT Id FROM dbo.Customers
+      WHERE Status != 'Activo' AND Deleted = 0
+      -- Solo clientes que ya tenían cuentas antes del nuevo sistema
+      -- (tienen AccountId bajo cierto umbral o sin SetupToken reciente)
+  );
+GO
+
+-- 2. Activar usuarios de esas cuentas
+UPDATE u
+SET u.Active = 1
+FROM dbo.Users u
+INNER JOIN dbo.UserAccounts ua ON u.Id = ua.UserId
+INNER JOIN dbo.Accounts a ON ua.AccountId = a.Id
+INNER JOIN dbo.Customers c ON a.CustomerId = c.Id
+WHERE c.Status != 'Activo' AND c.Deleted = 0;
+GO
+
+-- 3. Marcar el Customer como Activo y limpiar SetupToken
+UPDATE dbo.Customers
+SET Status    = 'Activo',
+    SetupStep = 7,
+    SetupToken = NULL
+WHERE Status != 'Activo'
+  AND Deleted = 0
+  AND Id IN (
+      -- Solo clientes que ya tienen al menos una cuenta
+      SELECT DISTINCT CustomerId FROM dbo.Accounts
+  );
+GO
+
