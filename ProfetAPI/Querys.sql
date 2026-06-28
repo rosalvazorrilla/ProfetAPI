@@ -2640,14 +2640,14 @@ WHERE Status != 'Activo'
   );
 GO
 
--- 2. Activar usuarios de esas cuentas
-UPDATE u
-SET u.Active = 1
-FROM dbo.Users u
-INNER JOIN dbo.UserAccounts ua ON u.Id = ua.UserId
-INNER JOIN dbo.Accounts a ON ua.AccountId = a.Id
-INNER JOIN dbo.Customers c ON a.CustomerId = c.Id
-WHERE c.Status != 'Activo' AND c.Deleted = 0;
+-- 2. Activar usuarios de clientes legacy
+UPDATE dbo.Users
+SET Active = 1
+WHERE CustomerId IN (
+    SELECT Id FROM dbo.Customers
+    WHERE Status != 'Activo' AND Deleted = 0
+      AND Id IN (SELECT DISTINCT CustomerId FROM dbo.Accounts)
+);
 GO
 
 -- 3. Marcar el Customer como Activo y limpiar SetupToken

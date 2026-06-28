@@ -56,14 +56,39 @@ public class MetaController : ControllerBase
         using var exchangeDoc  = JsonDocument.Parse(exchangeJson);
         var longLivedToken     = exchangeDoc.RootElement.GetProperty("access_token").GetString() ?? "";
 
-        // ── 2. Traer páginas (me/accounts cubre páginas directas y las de Business Manager
-        //       cuando el token tiene pages_show_list) ────────────────────────────────────
+        // ── 2. Traer páginas usando field expansion (retorna todas las páginas incluyendo BM) ──
         var pages   = new List<MetaPageDto>();
         var seenIds = new HashSet<string>();
 
-        await FetchPages(client,
-            $"https://graph.facebook.com/v19.0/me/accounts?fields=name,id,access_token&limit=200&access_token={longLivedToken}",
-            pages, seenIds);
+        var meUrl  = $"https://graph.facebook.com/v19.0/me?fields=accounts.limit(200){{id,name,access_token}}&access_token={longLivedToken}";
+        var meResp = await client.GetAsync(meUrl);
+        var meJson = await meResp.Content.ReadAsStringAsync();
+
+        if (meResp.IsSuccessStatusCode)
+        {
+            using var meDoc = JsonDocument.Parse(meJson);
+            var meRoot = meDoc.RootElement;
+
+            if (meRoot.TryGetProperty("accounts", out var accountsProp))
+            {
+                if (accountsProp.TryGetProperty("data", out var data))
+                    foreach (var page in data.EnumerateArray())
+                    {
+                        var id = page.GetProperty("id").GetString() ?? "";
+                        if (seenIds.Add(id))
+                            pages.Add(new MetaPageDto(
+                                id,
+                                page.GetProperty("name").GetString() ?? "",
+                                page.TryGetProperty("access_token", out var t) ? t.GetString() ?? "" : ""
+                            ));
+                    }
+
+                if (accountsProp.TryGetProperty("paging", out var paging) &&
+                    paging.TryGetProperty("next", out var nextProp) &&
+                    nextProp.GetString() is string nextUrl)
+                    await FetchPages(client, nextUrl, pages, seenIds);
+            }
+        }
 
         return Ok(pages);
     }
