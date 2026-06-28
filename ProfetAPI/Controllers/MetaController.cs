@@ -56,34 +56,43 @@ public class MetaController : ControllerBase
         using var exchangeDoc  = JsonDocument.Parse(exchangeJson);
         var longLivedToken     = exchangeDoc.RootElement.GetProperty("access_token").GetString() ?? "";
 
-        // ── 2. Traer TODAS las páginas con paginación ─────────────────────────
+        // ── 2. Traer páginas directas (me/accounts) ──────────────────────────
         var pages    = new List<MetaPageDto>();
-        string? next = $"https://graph.facebook.com/v19.0/me/accounts" +
-                       $"?fields=name,id,access_token&limit=100&access_token={longLivedToken}";
+        var seenIds  = new HashSet<string>();
 
-        while (next != null)
+        await FetchPages(client,
+            $"https://graph.facebook.com/v19.0/me/accounts?fields=name,id,access_token&limit=100&access_token={longLivedToken}",
+            pages, seenIds);
+
+        // ── 3. Traer páginas de Business Manager ──────────────────────────────
+        string? bizNext = $"https://graph.facebook.com/v19.0/me/businesses?fields=id,name&limit=50&access_token={longLivedToken}";
+        while (bizNext != null)
         {
-            var pagesResp = await client.GetAsync(next);
-            var pagesJson = await pagesResp.Content.ReadAsStringAsync();
+            var bizResp = await client.GetAsync(bizNext);
+            if (!bizResp.IsSuccessStatusCode) break;
 
-            if (!pagesResp.IsSuccessStatusCode) break;
+            using var bizDoc = JsonDocument.Parse(await bizResp.Content.ReadAsStringAsync());
+            var bizRoot      = bizDoc.RootElement;
 
-            using var pagesDoc = JsonDocument.Parse(pagesJson);
-            var root           = pagesDoc.RootElement;
+            if (bizRoot.TryGetProperty("data", out var businesses))
+            {
+                foreach (var biz in businesses.EnumerateArray())
+                {
+                    var bizId = biz.GetProperty("id").GetString() ?? "";
+                    // páginas propias del business
+                    await FetchPages(client,
+                        $"https://graph.facebook.com/v19.0/{bizId}/owned_pages?fields=name,id,access_token&limit=100&access_token={longLivedToken}",
+                        pages, seenIds);
+                    // páginas de clientes del business
+                    await FetchPages(client,
+                        $"https://graph.facebook.com/v19.0/{bizId}/client_pages?fields=name,id,access_token&limit=100&access_token={longLivedToken}",
+                        pages, seenIds);
+                }
+            }
 
-            if (root.TryGetProperty("data", out var data))
-                foreach (var page in data.EnumerateArray())
-                    pages.Add(new MetaPageDto(
-                        page.GetProperty("id").GetString()           ?? "",
-                        page.GetProperty("name").GetString()         ?? "",
-                        page.GetProperty("access_token").GetString() ?? ""
-                    ));
-
-            // paginación
-            next = null;
-            if (root.TryGetProperty("paging", out var paging) &&
-                paging.TryGetProperty("next", out var nextProp))
-                next = nextProp.GetString();
+            bizNext = null;
+            if (bizRoot.TryGetProperty("paging", out var p) && p.TryGetProperty("next", out var n))
+                bizNext = n.GetString();
         }
 
         return Ok(pages);
@@ -136,6 +145,36 @@ public class MetaController : ControllerBase
         }
 
         return Ok(forms);
+    }
+
+    private static async Task FetchPages(HttpClient client, string url, List<MetaPageDto> pages, HashSet<string> seenIds)
+    {
+        string? next = url;
+        while (next != null)
+        {
+            var resp = await client.GetAsync(next);
+            if (!resp.IsSuccessStatusCode) break;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("data", out var data))
+                foreach (var page in data.EnumerateArray())
+                {
+                    var id = page.GetProperty("id").GetString() ?? "";
+                    if (seenIds.Add(id)) // evita duplicados
+                        pages.Add(new MetaPageDto(
+                            id,
+                            page.GetProperty("name").GetString() ?? "",
+                            page.TryGetProperty("access_token", out var t) ? t.GetString() ?? "" : ""
+                        ));
+                }
+
+            next = null;
+            if (root.TryGetProperty("paging", out var paging) &&
+                paging.TryGetProperty("next", out var nextProp))
+                next = nextProp.GetString();
+        }
     }
 }
 
