@@ -56,44 +56,14 @@ public class MetaController : ControllerBase
         using var exchangeDoc  = JsonDocument.Parse(exchangeJson);
         var longLivedToken     = exchangeDoc.RootElement.GetProperty("access_token").GetString() ?? "";
 
-        // ── 2. Traer páginas directas (me/accounts) ──────────────────────────
-        var pages    = new List<MetaPageDto>();
-        var seenIds  = new HashSet<string>();
+        // ── 2. Traer páginas (me/accounts cubre páginas directas y las de Business Manager
+        //       cuando el token tiene pages_show_list) ────────────────────────────────────
+        var pages   = new List<MetaPageDto>();
+        var seenIds = new HashSet<string>();
 
         await FetchPages(client,
-            $"https://graph.facebook.com/v19.0/me/accounts?fields=name,id,access_token&limit=100&access_token={longLivedToken}",
+            $"https://graph.facebook.com/v19.0/me/accounts?fields=name,id,access_token&limit=200&access_token={longLivedToken}",
             pages, seenIds);
-
-        // ── 3. Traer páginas de Business Manager ──────────────────────────────
-        string? bizNext = $"https://graph.facebook.com/v19.0/me/businesses?fields=id,name&limit=50&access_token={longLivedToken}";
-        while (bizNext != null)
-        {
-            var bizResp = await client.GetAsync(bizNext);
-            if (!bizResp.IsSuccessStatusCode) break;
-
-            using var bizDoc = JsonDocument.Parse(await bizResp.Content.ReadAsStringAsync());
-            var bizRoot      = bizDoc.RootElement;
-
-            if (bizRoot.TryGetProperty("data", out var businesses))
-            {
-                foreach (var biz in businesses.EnumerateArray())
-                {
-                    var bizId = biz.GetProperty("id").GetString() ?? "";
-                    // páginas propias del business
-                    await FetchPages(client,
-                        $"https://graph.facebook.com/v19.0/{bizId}/owned_pages?fields=name,id,access_token&limit=100&access_token={longLivedToken}",
-                        pages, seenIds);
-                    // páginas de clientes del business
-                    await FetchPages(client,
-                        $"https://graph.facebook.com/v19.0/{bizId}/client_pages?fields=name,id,access_token&limit=100&access_token={longLivedToken}",
-                        pages, seenIds);
-                }
-            }
-
-            bizNext = null;
-            if (bizRoot.TryGetProperty("paging", out var p) && p.TryGetProperty("next", out var n))
-                bizNext = n.GetString();
-        }
 
         return Ok(pages);
     }
