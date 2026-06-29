@@ -2663,3 +2663,23 @@ WHERE Status != 'Activo'
   );
 GO
 
+-- ── Nombre de página Meta en webhooks ────────────────────────────────────────
+ALTER TABLE dbo.AccountWebhooks ADD MetaPageName NVARCHAR(200) NULL;
+GO
+
+-- ── Historial de eventos de webhooks ─────────────────────────────────────────
+CREATE TABLE dbo.WebhookEventLogs (
+    EventLogId  BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    WebhookId   INT NOT NULL,
+    ReceivedAt  DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    Status      NVARCHAR(20) NOT NULL DEFAULT 'Success',
+    Summary     NVARCHAR(300) NULL,
+    ExternalId  NVARCHAR(100) NULL,
+    ErrorMessage NVARCHAR(500) NULL,
+    CONSTRAINT FK_WebhookEventLogs_Webhook FOREIGN KEY (WebhookId)
+        REFERENCES dbo.AccountWebhooks(WebhookId) ON DELETE CASCADE
+);
+CREATE INDEX IX_WebhookEventLogs_WebhookId_ReceivedAt
+    ON dbo.WebhookEventLogs(WebhookId, ReceivedAt DESC);
+GO
+

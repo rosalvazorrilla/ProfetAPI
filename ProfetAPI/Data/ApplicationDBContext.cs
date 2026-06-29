@@ -110,6 +110,7 @@ namespace ProfetAPI.Data
 
         // --- DBSETS PARA WEBHOOKS ---
         public DbSet<AccountWebhook> AccountWebhooks { get; set; } = null!;
+        public DbSet<WebhookEventLog> WebhookEventLogs { get; set; } = null!;
 
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }

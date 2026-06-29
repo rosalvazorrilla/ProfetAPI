@@ -15,8 +15,13 @@ namespace ProfetAPI.Controllers;
 public class WebhooksController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
+    private readonly IHttpClientFactory   _http;
 
-    public WebhooksController(ApplicationDbContext db) => _db = db;
+    public WebhooksController(ApplicationDbContext db, IHttpClientFactory http)
+    {
+        _db   = db;
+        _http = http;
+    }
 
     private string? UserId   => User.FindFirstValue(ClaimTypes.NameIdentifier);
     private string? UserRole => User.FindFirstValue(ClaimTypes.Role);
@@ -63,6 +68,7 @@ public class WebhooksController : ControllerBase
                 w.IsActive,
                 w.MetaAppId,
                 w.MetaPageId,
+                w.MetaPageName,
                 w.MetaFormId,
                 w.MetaFormName,
                 w.MetaVerifyToken,
@@ -117,8 +123,12 @@ public class WebhooksController : ControllerBase
         _db.AccountWebhooks.Add(wh);
         await _db.SaveChangesAsync();
 
+        bool metaSubscribed = false;
+        if (wh.Platform == "MetaLeadAds" && !string.IsNullOrEmpty(wh.MetaPageId) && !string.IsNullOrEmpty(wh.MetaPageAccessToken))
+            metaSubscribed = await SubscribeMetaPage(wh.MetaPageId, wh.MetaPageAccessToken);
+
         return CreatedAtAction(nameof(GetOne), new { id = wh.WebhookId },
-            new { wh.WebhookId, wh.WebhookKey, wh.MetaVerifyToken, wh.Direction });
+            new { wh.WebhookId, wh.WebhookKey, wh.MetaVerifyToken, wh.Direction, metaSubscribed });
     }
 
     // ── PUT /api/webhooks/{id} ─────────────────────────────────────────────────
@@ -161,6 +171,155 @@ public class WebhooksController : ControllerBase
         return NoContent();
     }
 
+    // ── POST /api/webhooks/{id}/meta/clone ────────────────────────────────────
+
+    [HttpPost("{id:int}/meta/clone")]
+    [SwaggerOperation(Summary = "Crear nueva integración Meta reutilizando la conexión de página de una existente")]
+    [ProducesResponseType(201)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> CloneMeta(int id, [FromQuery] int? accountId, [FromBody] CloneMetaRequest req)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        var source = await _db.AccountWebhooks
+            .FirstOrDefaultAsync(x => x.WebhookId == id && x.AccountId == resolved && x.Platform == "MetaLeadAds");
+        if (source == null) return NotFound();
+        if (string.IsNullOrEmpty(source.MetaPageId) || string.IsNullOrEmpty(source.MetaPageAccessToken))
+            return BadRequest("La integración fuente no tiene página de Meta configurada.");
+        if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest("Name es requerido.");
+
+        var wh = new AccountWebhook
+        {
+            AccountId           = resolved.Value,
+            Name                = req.Name.Trim(),
+            Direction           = "Incoming",
+            Platform            = "MetaLeadAds",
+            ActionType          = req.ActionType ?? "CreateLead",
+            IsActive            = true,
+            WebhookKey          = Guid.NewGuid().ToString("N"),
+            MetaAppId           = source.MetaAppId,
+            MetaAppSecret       = source.MetaAppSecret,
+            MetaVerifyToken     = Guid.NewGuid().ToString("N"),
+            MetaPageId          = source.MetaPageId,
+            MetaPageName        = source.MetaPageName,
+            MetaPageAccessToken = source.MetaPageAccessToken,
+            MetaFormId          = req.FormId?.Trim(),
+            MetaFormName        = req.FormName?.Trim(),
+            DestLeadStatus      = req.DestLeadStatus ?? "Nuevo",
+            CreatedAt           = DateTime.UtcNow,
+        };
+
+        _db.AccountWebhooks.Add(wh);
+        await _db.SaveChangesAsync();
+
+        await SubscribeMetaPage(wh.MetaPageId, wh.MetaPageAccessToken);
+
+        return CreatedAtAction(nameof(GetOne), new { id = wh.WebhookId },
+            new { wh.WebhookId, wh.Direction, metaSubscribed = true });
+    }
+
+    // ── POST /api/webhooks/{id}/meta/subscribe ────────────────────────────────
+
+    [HttpPost("{id:int}/meta/subscribe")]
+    [SwaggerOperation(Summary = "Suscribir (o re-suscribir) la página de Meta al webhook de la app")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> MetaSubscribe(int id, [FromQuery] int? accountId)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        var wh = await _db.AccountWebhooks.FirstOrDefaultAsync(x => x.WebhookId == id && x.AccountId == resolved);
+        if (wh == null) return NotFound();
+        if (wh.Platform != "MetaLeadAds") return BadRequest("Solo aplica para integraciones de Meta Lead Ads.");
+        if (string.IsNullOrEmpty(wh.MetaPageId) || string.IsNullOrEmpty(wh.MetaPageAccessToken))
+            return BadRequest("La integración no tiene página de Meta configurada.");
+
+        var ok = await SubscribeMetaPage(wh.MetaPageId, wh.MetaPageAccessToken);
+        return ok ? Ok(new { subscribed = true }) : BadRequest(new { subscribed = false, error = "Meta no aceptó la suscripción. Verifica que el token de página siga vigente." });
+    }
+
+    // ── GET /api/webhooks/{id}/events ─────────────────────────────────────────
+
+    [HttpGet("{id:int}/events")]
+    [SwaggerOperation(Summary = "Historial de eventos recibidos por un webhook")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetEvents(int id, [FromQuery] int? accountId, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        var exists = await _db.AccountWebhooks.AnyAsync(x => x.WebhookId == id && x.AccountId == resolved);
+        if (!exists) return NotFound();
+
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var skip = (page - 1) * pageSize;
+
+        var events = await _db.WebhookEventLogs
+            .Where(e => e.WebhookId == id)
+            .OrderByDescending(e => e.ReceivedAt)
+            .Skip(skip)
+            .Take(pageSize)
+            .Select(e => new { e.EventLogId, e.ReceivedAt, e.Status, e.Summary, e.ExternalId, e.ErrorMessage })
+            .ToListAsync();
+
+        var total = await _db.WebhookEventLogs.CountAsync(e => e.WebhookId == id);
+
+        return Ok(new { total, page, pageSize, events });
+    }
+
+    // ── GET /api/webhooks/{id}/meta/forms ─────────────────────────────────────
+
+    [HttpGet("{id:int}/meta/forms")]
+    [SwaggerOperation(Summary = "Obtener formularios disponibles para el webhook de Meta")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetMetaForms(int id, [FromQuery] int? accountId)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        var wh = await _db.AccountWebhooks
+            .FirstOrDefaultAsync(x => x.WebhookId == id && x.AccountId == resolved);
+        if (wh == null) return NotFound();
+        if (string.IsNullOrEmpty(wh.MetaPageAccessToken) || string.IsNullOrEmpty(wh.MetaPageId))
+            return BadRequest("Esta integración no tiene página de Meta configurada.");
+
+        var client = _http.CreateClient();
+        var forms  = new List<object>();
+        string? next = $"https://graph.facebook.com/v19.0/{wh.MetaPageId}/leadgen_forms" +
+                       $"?fields=id,name,status&limit=100&access_token={wh.MetaPageAccessToken}";
+
+        while (next != null)
+        {
+            var resp = await client.GetAsync(next);
+            var json = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode) return BadRequest("No se pudieron obtener los formularios de Meta.");
+
+            using var doc  = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("data", out var data))
+                foreach (var f in data.EnumerateArray())
+                    forms.Add(new {
+                        FormId = f.GetProperty("id").GetString(),
+                        Name   = f.GetProperty("name").GetString(),
+                        Status = f.TryGetProperty("status", out var s) ? s.GetString() : "",
+                    });
+
+            next = null;
+            if (root.TryGetProperty("paging", out var paging) &&
+                paging.TryGetProperty("next", out var n))
+                next = n.GetString();
+        }
+
+        return Ok(forms);
+    }
+
     // ── POST /api/webhooks/{id}/regenerate-key ─────────────────────────────────
 
     [HttpPost("{id:int}/regenerate-key")]
@@ -183,6 +342,25 @@ public class WebhooksController : ControllerBase
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
+    private async Task<bool> SubscribeMetaPage(string pageId, string pageAccessToken)
+    {
+        try
+        {
+            var client  = _http.CreateClient();
+            var content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["subscribed_fields"] = "leadgen",
+                ["access_token"]      = pageAccessToken,
+            });
+            var resp = await client.PostAsync(
+                $"https://graph.facebook.com/v19.0/{pageId}/subscribed_apps", content);
+            var json = await resp.Content.ReadAsStringAsync();
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("success", out var s) && s.GetBoolean();
+        }
+        catch { return false; }
+    }
+
     private static AccountWebhook BuildWebhook(SaveWebhookRequest r, int accountId) => new()
     {
         AccountId            = accountId,
@@ -198,6 +376,7 @@ public class WebhooksController : ControllerBase
         MetaVerifyToken      = r.MetaVerifyToken?.Trim() ?? (r.Direction == "Incoming" ? Guid.NewGuid().ToString("N") : null),
         MetaPageAccessToken  = r.MetaPageAccessToken?.Trim(),
         MetaPageId           = r.MetaPageId?.Trim(),
+        MetaPageName         = r.MetaPageName?.Trim(),
         MetaFormId           = r.MetaFormId?.Trim(),
         MetaFormName         = r.MetaFormName?.Trim(),
         DestFunnelId         = r.DestFunnelId,
@@ -224,6 +403,7 @@ public class WebhooksController : ControllerBase
         if (r.MetaVerifyToken      != null) wh.MetaVerifyToken      = r.MetaVerifyToken.Trim();
         if (r.MetaPageAccessToken  != null) wh.MetaPageAccessToken  = r.MetaPageAccessToken.Trim();
         if (r.MetaPageId           != null) wh.MetaPageId           = r.MetaPageId.Trim();
+        if (r.MetaPageName         != null) wh.MetaPageName         = r.MetaPageName.Trim();
         if (r.MetaFormId           != null) wh.MetaFormId           = r.MetaFormId.Trim();
         if (r.MetaFormName         != null) wh.MetaFormName         = r.MetaFormName.Trim();
 
@@ -235,7 +415,7 @@ public class WebhooksController : ControllerBase
     private static object ToDto(AccountWebhook w) => new
     {
         w.WebhookId, w.AccountId, w.Name, w.Direction, w.Platform, w.ActionType,
-        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaFormId, w.MetaFormName, w.MetaVerifyToken,
+        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaPageName, w.MetaFormId, w.MetaFormName, w.MetaVerifyToken,
         w.DestFunnelId, w.DestLeadStatus,
         w.TriggerEvent, w.TargetUrl,
         w.IsActive, w.CreatedAt, w.LastTriggeredAt, w.TriggerCount, w.LastError,
@@ -246,6 +426,14 @@ public class WebhooksController : ControllerBase
 }
 
 // ── DTOs ───────────────────────────────────────────────────────────────────────
+
+public record CloneMetaRequest(
+    string  Name,
+    string? FormId         = null,
+    string? FormName       = null,
+    string? ActionType     = "CreateLead",
+    string? DestLeadStatus = "Nuevo"
+);
 
 public record SaveWebhookRequest(
     string  Name,
@@ -259,6 +447,7 @@ public record SaveWebhookRequest(
     string? MetaVerifyToken     = null,
     string? MetaPageAccessToken = null,
     string? MetaPageId          = null,
+    string? MetaPageName        = null,
     string? MetaFormId          = null,
     string? MetaFormName        = null,
     int?    DestFunnelId        = null,

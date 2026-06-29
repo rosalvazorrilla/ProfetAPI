@@ -35,6 +35,7 @@ public class AccountWebhook
     public string? MetaVerifyToken     { get; set; }
     public string? MetaPageAccessToken { get; set; }
     public string? MetaPageId          { get; set; }
+    public string? MetaPageName        { get; set; }
     public string? MetaFormId          { get; set; }
     public string? MetaFormName        { get; set; }
 
