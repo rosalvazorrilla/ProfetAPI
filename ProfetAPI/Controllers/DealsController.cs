@@ -106,46 +106,50 @@ public class DealsController : ControllerBase
 
         var statsMap = stageStats.ToDictionary(x => x.stageId ?? -1);
 
-        // ── 2. Top N deals por stage (una query proyectada por stage) ─────────
-        // Projection → EF genera LEFT JOINs eficientes; sin cargar entidades completas
+        // ── 2. Todos los deals del kanban en UNA sola query ──────────────────
         static string Initials(string name) =>
             string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
                               .Take(2).Select(p => char.ToUpper(p[0]).ToString()));
 
-        var kanbanStages = new List<object>(stages.Count);
+        var stageIds = stages.Select(s => s.StageId).ToList();
 
-        foreach (var s in stages)
+        var allDeals = await baseQ
+            .Where(d => d.StageId != null && stageIds.Contains(d.StageId.Value))
+            .OrderByDescending(d => d.CreatedOn)
+            .Select(d => new
+            {
+                dealId       = d.DealId,
+                dealName     = d.DealName,
+                quotedAmount = d.QuotedAmount,
+                status       = d.Status,
+                createdOn    = d.CreatedOn,
+                closeDate    = d.CloseDate,
+                stageId      = d.StageId,
+                company      = d.Company != null ? d.Company.Name : null,
+                contact      = d.PrimaryContact != null
+                    ? (d.PrimaryContact.FirstName + " " + d.PrimaryContact.LastName).Trim()
+                    : null,
+                ownerRaw = d.DealUsers
+                    .Where(du => du.RoleInDeal == "Owner" || du.RoleInDeal == null)
+                    .Select(du => du.User.UserProfile != null
+                        ? (du.User.UserProfile.FirstName + " " + du.User.UserProfile.LastName).Trim()
+                        : du.User.UserName ?? "")
+                    .FirstOrDefault() ?? "",
+            })
+            .ToListAsync();
+
+        // Agrupar en memoria — evita N+1 queries al backend
+        var dealsByStage = allDeals
+            .GroupBy(d => d.stageId ?? -1)
+            .ToDictionary(g => g.Key, g => g.Take(dealsPerStage).ToList());
+
+        var kanbanStages = stages.Select(s =>
         {
-            var pageDeals = await baseQ
-                .Where(d => d.StageId == s.StageId)
-                .OrderByDescending(d => d.CreatedOn)
-                .Take(dealsPerStage)
-                .Select(d => new
-                {
-                    dealId       = d.DealId,
-                    dealName     = d.DealName,
-                    quotedAmount = d.QuotedAmount,
-                    status       = d.Status,
-                    createdOn    = d.CreatedOn,
-                    closeDate    = d.CloseDate,
-                    stageId      = d.StageId,
-                    // navegación resuelta en SQL via LEFT JOIN (sin Include)
-                    company = d.Company != null ? d.Company.Name : null,
-                    contact = d.PrimaryContact != null
-                        ? (d.PrimaryContact.FirstName + " " + d.PrimaryContact.LastName).Trim()
-                        : null,
-                    ownerRaw = d.DealUsers
-                        .Where(du => du.RoleInDeal == "Owner" || du.RoleInDeal == null)
-                        .Select(du => du.User.UserProfile != null
-                            ? (du.User.UserProfile.FirstName + " " + du.User.UserProfile.LastName).Trim()
-                            : du.User.UserName ?? "")
-                        .FirstOrDefault() ?? "",
-                })
-                .ToListAsync();
-
             statsMap.TryGetValue(s.StageId, out var stat);
+            dealsByStage.TryGetValue(s.StageId, out var pageDeals);
+            pageDeals ??= [];
 
-            kanbanStages.Add(new
+            return (object)new
             {
                 stageId     = s.StageId,
                 name        = s.Name,
@@ -169,8 +173,8 @@ public class DealsController : ControllerBase
                     ownerInitials = d.ownerRaw.Length > 0 ? Initials(d.ownerRaw) : "?",
                     tags          = Array.Empty<object>(),
                 }).ToList(),
-            });
-        }
+            };
+        }).ToList();
 
         var totals = stageStats.Aggregate(
             (count: 0, amount: 0m),

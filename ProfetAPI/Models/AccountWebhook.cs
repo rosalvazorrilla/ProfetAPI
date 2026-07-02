@@ -38,6 +38,8 @@ public class AccountWebhook
     public string? MetaPageName        { get; set; }
     public string? MetaFormId          { get; set; }
     public string? MetaFormName        { get; set; }
+    /// <summary>JSON: {"name":"full_name","email":"email","phone":"phone_number",...} — CRM field → Meta question key</summary>
+    public string? FieldMappingJson    { get; set; }
 
     // Destino en Profet para leads/contactos entrantes
     public int?    DestFunnelId   { get; set; }

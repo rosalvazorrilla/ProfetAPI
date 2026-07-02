@@ -245,25 +245,50 @@ public class WebhookReceiverController : ControllerBase
                     if (!string.IsNullOrEmpty(name)) fields_map[name] = val;
                 }
 
-            var fullName = fields_map.GetValueOrDefault("full_name")
-                        ?? (fields_map.GetValueOrDefault("first_name", "") + " " +
-                            fields_map.GetValueOrDefault("last_name",  "")).Trim();
+            // Mapeo de campos: si hay mapping guardado úsalo; si no, fallback a nombres estándar de Meta
+            Dictionary<string, string>? fmap = null;
+            if (!string.IsNullOrEmpty(wh.FieldMappingJson))
+            {
+                try { fmap = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(wh.FieldMappingJson); }
+                catch { }
+            }
 
-            var summary = string.IsNullOrWhiteSpace(fullName) ? "Lead sin nombre" : fullName;
-            if (fields_map.TryGetValue("email", out var email) && !string.IsNullOrEmpty(email))
-                summary += $" · {email}";
+            string GetMapped(string crmField, params string[] metaFallbacks)
+            {
+                if (fmap != null && fmap.TryGetValue(crmField, out var mappedKey) && !string.IsNullOrEmpty(mappedKey))
+                    return fields_map.GetValueOrDefault(mappedKey) ?? "";
+                foreach (var k in metaFallbacks)
+                    if (fields_map.TryGetValue(k, out var v) && !string.IsNullOrEmpty(v)) return v;
+                return "";
+            }
+
+            var firstName = GetMapped("first_name", "first_name");
+            var lastName  = GetMapped("last_name",  "last_name");
+            var fullName  = GetMapped("name", "full_name")
+                         .IfEmpty((firstName + " " + lastName).Trim())
+                         .IfEmpty("Lead Meta");
+
+            var email    = GetMapped("email",    "email");
+            var phone    = GetMapped("phone",    "phone_number", "phone");
+            var company  = GetMapped("company",  "company_name", "company");
+            var city     = GetMapped("city",     "city");
+            var position = GetMapped("position", "job_title", "position");
+            var message  = GetMapped("message",  "message", "comments", "comment");
+
+            var summary = fullName;
+            if (!string.IsNullOrEmpty(email)) summary += $" · {email}";
 
             switch (wh.ActionType)
             {
                 case "CreateContact":
-                    var nameParts = (fullName.Length > 0 ? fullName : "Contacto Meta").Split(' ', 2);
+                    var nameParts = fullName.Split(' ', 2);
                     _db.Contacts.Add(new Contact
                     {
                         FirstName       = nameParts[0],
                         LastName        = nameParts.Length > 1 ? nameParts[1] : null,
-                        Email           = fields_map.GetValueOrDefault("email"),
-                        PhoneNumber     = fields_map.GetValueOrDefault("phone_number") ?? fields_map.GetValueOrDefault("phone"),
-                        Position        = fields_map.GetValueOrDefault("job_title") ?? fields_map.GetValueOrDefault("position"),
+                        Email           = email.NullIfEmpty(),
+                        PhoneNumber     = phone.NullIfEmpty(),
+                        Position        = position.NullIfEmpty(),
                         LifecycleStatus = "Nuevo",
                         CreatedOn       = DateTime.UtcNow,
                     });
@@ -277,14 +302,15 @@ public class WebhookReceiverController : ControllerBase
                     _db.Leads.Add(new Lead
                     {
                         AccountId      = wh.AccountId,
-                        Name           = string.IsNullOrWhiteSpace(fullName) ? "Lead Meta" : fullName,
-                        Email          = fields_map.GetValueOrDefault("email"),
-                        Phone          = fields_map.GetValueOrDefault("phone_number") ?? fields_map.GetValueOrDefault("phone"),
-                        Company        = fields_map.GetValueOrDefault("company_name") ?? fields_map.GetValueOrDefault("company"),
-                        Position       = fields_map.GetValueOrDefault("job_title")   ?? fields_map.GetValueOrDefault("position"),
-                        City           = fields_map.GetValueOrDefault("city"),
+                        Name           = fullName,
+                        Email          = email.NullIfEmpty(),
+                        Phone          = phone.NullIfEmpty(),
+                        Company        = company.NullIfEmpty(),
+                        Position       = position.NullIfEmpty(),
+                        City           = city.NullIfEmpty(),
+                        InitialMessage = message.NullIfEmpty(),
                         ProspectSource = "Meta Lead Ads",
-                        AdName         = root.TryGetProperty("ad_name",      out var an) ? an.GetString() : null,
+                        AdName         = root.TryGetProperty("ad_name",       out var an) ? an.GetString() : null,
                         CampaignName   = root.TryGetProperty("campaign_name", out var cn) ? cn.GetString() : null,
                         StageId        = wh.DestFunnelId,
                         Status         = wh.DestLeadStatus ?? "Nuevo",
@@ -314,4 +340,12 @@ public class WebhookReceiverController : ControllerBase
         wh.TriggerCount++;
         await _db.SaveChangesAsync();
     }
+}
+
+internal static class StringExtensions
+{
+    internal static string IfEmpty(this string s, string fallback) =>
+        string.IsNullOrWhiteSpace(s) ? fallback : s;
+    internal static string? NullIfEmpty(this string s) =>
+        string.IsNullOrWhiteSpace(s) ? null : s;
 }

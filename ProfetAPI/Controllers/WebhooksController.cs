@@ -71,6 +71,7 @@ public class WebhooksController : ControllerBase
                 w.MetaPageName,
                 w.MetaFormId,
                 w.MetaFormName,
+                w.FieldMappingJson,
                 w.MetaVerifyToken,
                 w.DestFunnelId,
                 w.DestLeadStatus,
@@ -207,6 +208,7 @@ public class WebhooksController : ControllerBase
             MetaPageAccessToken = source.MetaPageAccessToken,
             MetaFormId          = req.FormId?.Trim(),
             MetaFormName        = req.FormName?.Trim(),
+            FieldMappingJson    = req.FieldMappingJson?.Trim(),
             DestLeadStatus      = req.DestLeadStatus ?? "Nuevo",
             CreatedAt           = DateTime.UtcNow,
         };
@@ -320,6 +322,53 @@ public class WebhooksController : ControllerBase
         return Ok(forms);
     }
 
+    // ── GET /api/webhooks/{id}/meta/form-questions?formId= ───────────────────────
+
+    [HttpGet("{id:int}/meta/form-questions")]
+    [SwaggerOperation(Summary = "Obtener preguntas de un formulario de Meta Lead Ads (para mapeo de campos)")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetMetaFormQuestions(int id, [FromQuery] int? accountId, [FromQuery] string? formId)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        var wh = await _db.AccountWebhooks
+            .FirstOrDefaultAsync(x => x.WebhookId == id && x.AccountId == resolved);
+        if (wh == null) return NotFound();
+        if (string.IsNullOrEmpty(wh.MetaPageAccessToken))
+            return BadRequest("Esta integración no tiene token de página configurado.");
+
+        var targetFormId = formId ?? wh.MetaFormId;
+        if (string.IsNullOrEmpty(targetFormId))
+            return BadRequest("Se requiere formId.");
+
+        var client = _http.CreateClient();
+        var url    = $"https://graph.facebook.com/v19.0/{targetFormId}?fields=name,questions&access_token={wh.MetaPageAccessToken}";
+        var resp   = await client.GetAsync(url);
+        var json   = await resp.Content.ReadAsStringAsync();
+
+        if (!resp.IsSuccessStatusCode)
+            return BadRequest($"Error de Meta Graph API: {json[..Math.Min(json.Length, 200)]}");
+
+        using var doc  = System.Text.Json.JsonDocument.Parse(json);
+        var root       = doc.RootElement;
+        var questions  = new List<object>();
+
+        if (root.TryGetProperty("questions", out var qs))
+            foreach (var q in qs.EnumerateArray())
+            {
+                var key   = q.TryGetProperty("key",   out var k) ? k.GetString() : null;
+                var label = q.TryGetProperty("label", out var l) ? l.GetString() : null;
+                var type  = q.TryGetProperty("type",  out var t) ? t.GetString() : null;
+                if (!string.IsNullOrEmpty(key))
+                    questions.Add(new { key, label = label ?? key, type = type ?? "CUSTOM" });
+            }
+
+        return Ok(new { formId = targetFormId, questions });
+    }
+
     // ── POST /api/webhooks/{id}/regenerate-key ─────────────────────────────────
 
     [HttpPost("{id:int}/regenerate-key")]
@@ -379,6 +428,7 @@ public class WebhooksController : ControllerBase
         MetaPageName         = r.MetaPageName?.Trim(),
         MetaFormId           = r.MetaFormId?.Trim(),
         MetaFormName         = r.MetaFormName?.Trim(),
+        FieldMappingJson     = r.FieldMappingJson?.Trim(),
         DestFunnelId         = r.DestFunnelId,
         DestLeadStatus       = r.DestLeadStatus ?? "Nuevo",
         // Outgoing
@@ -406,6 +456,7 @@ public class WebhooksController : ControllerBase
         if (r.MetaPageName         != null) wh.MetaPageName         = r.MetaPageName.Trim();
         if (r.MetaFormId           != null) wh.MetaFormId           = r.MetaFormId.Trim();
         if (r.MetaFormName         != null) wh.MetaFormName         = r.MetaFormName.Trim();
+        if (r.FieldMappingJson     != null) wh.FieldMappingJson     = r.FieldMappingJson.Trim();
 
         if (r.TriggerEvent   != null) wh.TriggerEvent   = r.TriggerEvent.Trim();
         if (r.TargetUrl      != null) wh.TargetUrl      = r.TargetUrl.Trim();
@@ -415,7 +466,7 @@ public class WebhooksController : ControllerBase
     private static object ToDto(AccountWebhook w) => new
     {
         w.WebhookId, w.AccountId, w.Name, w.Direction, w.Platform, w.ActionType,
-        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaPageName, w.MetaFormId, w.MetaFormName, w.MetaVerifyToken,
+        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaPageName, w.MetaFormId, w.MetaFormName, w.FieldMappingJson, w.MetaVerifyToken,
         w.DestFunnelId, w.DestLeadStatus,
         w.TriggerEvent, w.TargetUrl,
         w.IsActive, w.CreatedAt, w.LastTriggeredAt, w.TriggerCount, w.LastError,
@@ -429,10 +480,11 @@ public class WebhooksController : ControllerBase
 
 public record CloneMetaRequest(
     string  Name,
-    string? FormId         = null,
-    string? FormName       = null,
-    string? ActionType     = "CreateLead",
-    string? DestLeadStatus = "Nuevo"
+    string? FormId          = null,
+    string? FormName        = null,
+    string? ActionType      = "CreateLead",
+    string? DestLeadStatus  = "Nuevo",
+    string? FieldMappingJson = null
 );
 
 public record SaveWebhookRequest(
@@ -450,6 +502,7 @@ public record SaveWebhookRequest(
     string? MetaPageName        = null,
     string? MetaFormId          = null,
     string? MetaFormName        = null,
+    string? FieldMappingJson    = null,
     int?    DestFunnelId        = null,
     string? DestLeadStatus      = "Nuevo",
     // Outgoing

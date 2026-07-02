@@ -2683,3 +2683,7 @@ CREATE INDEX IX_WebhookEventLogs_WebhookId_ReceivedAt
     ON dbo.WebhookEventLogs(WebhookId, ReceivedAt DESC);
 GO
 
+-- ── Mapeo de campos Meta → CRM en webhooks ───────────────────────────────────
+ALTER TABLE dbo.AccountWebhooks ADD FieldMappingJson NVARCHAR(MAX) NULL;
+GO
+

@@ -142,6 +142,44 @@ public class MetaController : ControllerBase
         return Ok(forms);
     }
 
+    /// <summary>
+    /// Devuelve las preguntas de un formulario de Lead Ads.
+    /// Permite al usuario mapear cada pregunta a un campo del CRM.
+    /// </summary>
+    [HttpGet("forms/{formId}/questions")]
+    [SwaggerOperation(Summary = "Obtener preguntas de un formulario de Meta Lead Ads")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    public async Task<IActionResult> GetFormQuestions(string formId, [FromQuery] string pageAccessToken)
+    {
+        if (string.IsNullOrWhiteSpace(pageAccessToken))
+            return BadRequest("pageAccessToken es requerido.");
+
+        var client = _http.CreateClient();
+        var url    = $"https://graph.facebook.com/v19.0/{formId}?fields=name,questions&access_token={pageAccessToken}";
+        var resp   = await client.GetAsync(url);
+        var json   = await resp.Content.ReadAsStringAsync();
+
+        if (!resp.IsSuccessStatusCode)
+            return BadRequest($"Error de Meta Graph API: {json[..Math.Min(json.Length, 200)]}");
+
+        using var doc = JsonDocument.Parse(json);
+        var root      = doc.RootElement;
+        var questions = new List<object>();
+
+        if (root.TryGetProperty("questions", out var qs))
+            foreach (var q in qs.EnumerateArray())
+            {
+                var key   = q.TryGetProperty("key",   out var k) ? k.GetString() : null;
+                var label = q.TryGetProperty("label", out var l) ? l.GetString() : null;
+                var type  = q.TryGetProperty("type",  out var t) ? t.GetString() : null;
+                if (!string.IsNullOrEmpty(key))
+                    questions.Add(new { key, label = label ?? key, type = type ?? "CUSTOM" });
+            }
+
+        return Ok(questions);
+    }
+
     private static async Task FetchPages(HttpClient client, string url, List<MetaPageDto> pages, HashSet<string> seenIds)
     {
         string? next = url;
