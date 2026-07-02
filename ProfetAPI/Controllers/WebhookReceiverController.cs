@@ -245,35 +245,46 @@ public class WebhookReceiverController : ControllerBase
                     if (!string.IsNullOrEmpty(name)) fields_map[name] = val;
                 }
 
-            // Mapeo de campos: si hay mapping guardado úsalo; si no, fallback a nombres estándar de Meta
-            Dictionary<string, string>? fmap = null;
+            // Mapeo: JSON guardado es { metaKey → crmField } (ej: {"full_name":"name","email":"email"})
+            // Construimos un diccionario inverso: crmField → valor del campo Meta
+            var crmValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (!string.IsNullOrEmpty(wh.FieldMappingJson))
             {
-                try { fmap = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(wh.FieldMappingJson); }
+                try
+                {
+                    var fmap = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(wh.FieldMappingJson);
+                    if (fmap != null)
+                        foreach (var (metaKey, crmField) in fmap)
+                            if (!string.IsNullOrEmpty(crmField) && !crmField.StartsWith("custom:") &&
+                                fields_map.TryGetValue(metaKey, out var val) && !string.IsNullOrEmpty(val))
+                                crmValues.TryAdd(crmField, val);
+                }
                 catch { }
             }
 
-            string GetMapped(string crmField, params string[] metaFallbacks)
+            // Obtener valor de un campo CRM: usa mapping guardado primero, luego fallback a nombres estándar
+            bool hasMapping = crmValues.Count > 0;
+            string GetCrm(string crmField, params string[] metaFallbacks)
             {
-                if (fmap != null && fmap.TryGetValue(crmField, out var mappedKey) && !string.IsNullOrEmpty(mappedKey))
-                    return fields_map.GetValueOrDefault(mappedKey) ?? "";
+                if (crmValues.TryGetValue(crmField, out var v) && !string.IsNullOrEmpty(v)) return v;
+                if (hasMapping) return ""; // hay mapping pero este campo no está mapeado → vacío intencional
                 foreach (var k in metaFallbacks)
-                    if (fields_map.TryGetValue(k, out var v) && !string.IsNullOrEmpty(v)) return v;
+                    if (fields_map.TryGetValue(k, out var fv) && !string.IsNullOrEmpty(fv)) return fv;
                 return "";
             }
 
-            var firstName = GetMapped("first_name", "first_name");
-            var lastName  = GetMapped("last_name",  "last_name");
-            var fullName  = GetMapped("name", "full_name")
+            var firstName = GetCrm("first_name", "first_name");
+            var lastName  = GetCrm("last_name",  "last_name");
+            var fullName  = GetCrm("name", "full_name")
                          .IfEmpty((firstName + " " + lastName).Trim())
                          .IfEmpty("Lead Meta");
 
-            var email    = GetMapped("email",    "email");
-            var phone    = GetMapped("phone",    "phone_number", "phone");
-            var company  = GetMapped("company",  "company_name", "company");
-            var city     = GetMapped("city",     "city");
-            var position = GetMapped("position", "job_title", "position");
-            var message  = GetMapped("message",  "message", "comments", "comment");
+            var email    = GetCrm("email",    "email");
+            var phone    = GetCrm("phone",    "phone_number", "phone");
+            var company  = GetCrm("company",  "company_name", "company");
+            var city     = GetCrm("city",     "city");
+            var position = GetCrm("position", "job_title", "position");
+            var message  = GetCrm("message",  "message", "comments", "comment");
 
             var summary = fullName;
             if (!string.IsNullOrEmpty(email)) summary += $" · {email}";
