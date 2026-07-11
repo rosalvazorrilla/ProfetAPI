@@ -112,6 +112,11 @@ namespace ProfetAPI.Data
         public DbSet<AccountWebhook> AccountWebhooks { get; set; } = null!;
         public DbSet<WebhookEventLog> WebhookEventLogs { get; set; } = null!;
 
+        // --- DBSETS PARA AUTOMATIZACIONES ---
+        public DbSet<AutomationRule> AutomationRules { get; set; } = null!;
+        public DbSet<AutomationStep> AutomationSteps { get; set; } = null!;
+        public DbSet<AutomationLog>  AutomationLogs  { get; set; } = null!;
+
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
 

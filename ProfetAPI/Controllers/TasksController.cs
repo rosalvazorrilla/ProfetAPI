@@ -48,6 +48,8 @@ public class TasksController : ControllerBase
         [FromQuery] string? priority,
         [FromQuery] string? assignedTo,
         [FromQuery] string? search,
+        [FromQuery] DateTime? dueDateFrom,
+        [FromQuery] DateTime? dueDateTo,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25)
     {
@@ -59,6 +61,10 @@ public class TasksController : ControllerBase
 
         if (!string.IsNullOrWhiteSpace(status))
             q = q.Where(a => a.TaskStatus == status);
+        if (dueDateFrom.HasValue)
+            q = q.Where(a => a.DueDate >= dueDateFrom.Value);
+        if (dueDateTo.HasValue)
+            q = q.Where(a => a.DueDate <= dueDateTo.Value);
 
         if (!string.IsNullOrWhiteSpace(priority))
             q = q.Where(a => a.Priority == priority);

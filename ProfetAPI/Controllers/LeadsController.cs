@@ -14,8 +14,18 @@ namespace ProfetAPI.Controllers;
 public class LeadsController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
+    private readonly ProfetAPI.Services.AutomationExecutorService _automations;
+    private readonly ProfetAPI.Services.PlaybookService _playbooks;
 
-    public LeadsController(ApplicationDbContext context) => _context = context;
+    public LeadsController(
+        ApplicationDbContext context,
+        ProfetAPI.Services.AutomationExecutorService automations,
+        ProfetAPI.Services.PlaybookService playbooks)
+    {
+        _context     = context;
+        _automations = automations;
+        _playbooks   = playbooks;
+    }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     private string? CurrentUserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
@@ -585,6 +595,22 @@ public class LeadsController : ControllerBase
 
         _context.Leads.Add(lead);
         await _context.SaveChangesAsync();
+
+        // Aplicar el playbook predeterminado de la cuenta: genera las tareas ordenadas para el vendedor
+        await _playbooks.ApplyDefaultAsync(resolvedAccountId, lead.LeadId, lead.OwnerUserId);
+
+        // Disparar automatizaciones "LeadCreated" para esta cuenta
+        _ = Task.Run(() => _automations.FireAsync(resolvedAccountId, "LeadCreated", new Dictionary<string, string>
+        {
+            ["_leadId"]       = lead.LeadId.ToString(),
+            ["name"]          = lead.Name          ?? "",
+            ["email"]         = lead.Email         ?? "",
+            ["phone"]         = lead.Phone         ?? "",
+            ["company"]       = lead.Company       ?? "",
+            ["prospectSource"]= lead.ProspectSource?? "",
+            ["campaignName"]  = lead.CampaignName  ?? "",
+            ["status"]        = lead.Status,
+        }));
 
         return CreatedAtAction(nameof(GetLead), new { id = lead.LeadId }, new
         {

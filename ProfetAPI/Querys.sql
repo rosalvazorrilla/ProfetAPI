@@ -2684,6 +2684,136 @@ CREATE INDEX IX_WebhookEventLogs_WebhookId_ReceivedAt
 GO
 
 -- ── Mapeo de campos Meta → CRM en webhooks ───────────────────────────────────
-ALTER TABLE dbo.AccountWebhooks ADD FieldMappingJson NVARCHAR(MAX) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AccountWebhooks') AND name = 'FieldMappingJson')
+    ALTER TABLE dbo.AccountWebhooks ADD FieldMappingJson NVARCHAR(MAX) NULL;
 GO
 
+
+-- ── Formatter: reglas de transformación por webhook ─────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AccountWebhooks') AND name = 'FormatterJson')
+    ALTER TABLE dbo.AccountWebhooks ADD FormatterJson NVARCHAR(MAX) NULL;
+GO
+
+-- ── Meta Ads Account ID: cruce de métricas de inversión publicitaria ────────
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AccountWebhooks') AND name = 'MetaAdAccountId')
+    ALTER TABLE dbo.AccountWebhooks ADD MetaAdAccountId NVARCHAR(50) NULL;
+GO
+
+-- ── Meta Ad Account ID a nivel de Account ───────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Accounts') AND name = 'MetaAdAccountId')
+    ALTER TABLE dbo.Accounts ADD MetaAdAccountId NVARCHAR(50) NULL;
+GO
+
+
+-- ── Automatizaciones (mini-Zapier) ───────────────────────────────────────────
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AutomationRules')
+CREATE TABLE dbo.AutomationRules (
+    RuleId           INT IDENTITY(1,1) PRIMARY KEY,
+    AccountId        INT NOT NULL REFERENCES dbo.Accounts(AccountId),
+    Name             NVARCHAR(200) NOT NULL,
+    IsActive         BIT NOT NULL DEFAULT 1,
+    Deleted          BIT NOT NULL DEFAULT 0,
+    TriggerType      NVARCHAR(50)  NOT NULL DEFAULT 'WebhookIncoming',
+    TriggerPlatform  NVARCHAR(50)  NULL,
+    WebhookKey       NVARCHAR(60)  NULL,
+    ConditionsJson   NVARCHAR(MAX) NULL,
+    CreatedAt        DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AutomationSteps')
+CREATE TABLE dbo.AutomationSteps (
+    StepId      INT IDENTITY(1,1) PRIMARY KEY,
+    RuleId      INT NOT NULL REFERENCES dbo.AutomationRules(RuleId) ON DELETE CASCADE,
+    StepOrder   INT NOT NULL DEFAULT 1,
+    StepType    NVARCHAR(30)  NOT NULL,
+    ConfigJson  NVARCHAR(MAX) NULL,
+    IsActive    BIT NOT NULL DEFAULT 1
+);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AutomationLogs')
+CREATE TABLE dbo.AutomationLogs (
+    LogId           BIGINT IDENTITY(1,1) PRIMARY KEY,
+    RuleId          INT NOT NULL REFERENCES dbo.AutomationRules(RuleId) ON DELETE CASCADE,
+    ExecutedAt      DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    Success         BIT NOT NULL DEFAULT 1,
+    StepsResultJson NVARCHAR(MAX) NULL,
+    ErrorMessage    NVARCHAR(1000) NULL,
+    PayloadPreview  NVARCHAR(500)  NULL
+);
+GO
+
+-- Índices para consultas frecuentes
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AutomationRules_AccountId')
+    CREATE INDEX IX_AutomationRules_AccountId ON dbo.AutomationRules(AccountId, IsActive, Deleted);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AutomationRules_WebhookKey')
+    CREATE UNIQUE INDEX IX_AutomationRules_WebhookKey ON dbo.AutomationRules(WebhookKey) WHERE WebhookKey IS NOT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AutomationLogs_RuleId')
+    CREATE INDEX IX_AutomationLogs_RuleId ON dbo.AutomationLogs(RuleId, ExecutedAt DESC);
+GO
+
+-- ####################################################################
+-- ### MODULO: PLAYBOOKS (secuencias de tareas configurables por cuenta)
+-- ### Crea ActivityPlaybooks / PlaybookTasks si no existen y las extiende.
+-- ####################################################################
+PRINT '--- Modulo Playbooks: creando/actualizando tablas... ---';
+
+-- Tablas base (solo si no existen; las columnas nuevas se agregan mas abajo)
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ActivityPlaybooks')
+CREATE TABLE dbo.ActivityPlaybooks (
+    PlaybookId INT PRIMARY KEY IDENTITY(1,1),
+    AccountId  INT NOT NULL,
+    Name       NVARCHAR(255) NOT NULL,
+    CONSTRAINT FK_ActivityPlaybooks_Accounts FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId)
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'PlaybookTasks')
+CREATE TABLE dbo.PlaybookTasks (
+    TaskId     INT PRIMARY KEY IDENTITY(1,1),
+    PlaybookId INT NOT NULL,
+    TaskName   NVARCHAR(1000) NOT NULL,
+    "Order"    INT NOT NULL,
+    CONSTRAINT FK_PlaybookTasks_Playbooks FOREIGN KEY (PlaybookId) REFERENCES dbo.ActivityPlaybooks(PlaybookId) ON DELETE CASCADE
+);
+GO
+
+-- ActivityPlaybooks: activo, predeterminado, descripcion, soft delete
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ActivityPlaybooks') AND name = 'Description')
+    ALTER TABLE dbo.ActivityPlaybooks ADD Description NVARCHAR(1000) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ActivityPlaybooks') AND name = 'IsActive')
+    ALTER TABLE dbo.ActivityPlaybooks ADD IsActive BIT NOT NULL DEFAULT 1;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ActivityPlaybooks') AND name = 'IsDefault')
+    ALTER TABLE dbo.ActivityPlaybooks ADD IsDefault BIT NOT NULL DEFAULT 0;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ActivityPlaybooks') AND name = 'Deleted')
+    ALTER TABLE dbo.ActivityPlaybooks ADD Deleted BIT NOT NULL DEFAULT 0;
+GO
+
+-- PlaybookTasks: descripcion, prioridad, dias de offset para la fecha limite
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.PlaybookTasks') AND name = 'Description')
+    ALTER TABLE dbo.PlaybookTasks ADD Description NVARCHAR(1000) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.PlaybookTasks') AND name = 'Priority')
+    ALTER TABLE dbo.PlaybookTasks ADD Priority NVARCHAR(20) NOT NULL DEFAULT 'Media';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.PlaybookTasks') AND name = 'OffsetDays')
+    ALTER TABLE dbo.PlaybookTasks ADD OffsetDays INT NOT NULL DEFAULT 0;
+GO
+
+-- Indice: buscar rapido el playbook predeterminado activo de una cuenta
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ActivityPlaybooks_AccountDefault')
+    CREATE INDEX IX_ActivityPlaybooks_AccountDefault ON dbo.ActivityPlaybooks(AccountId, IsDefault, IsActive, Deleted);
+GO
+
+-- PlaybookTasks: tipo de accion del paso y etapa destino (recorrido lead -> oportunidad)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.PlaybookTasks') AND name = 'ActionType')
+    ALTER TABLE dbo.PlaybookTasks ADD ActionType NVARCHAR(30) NOT NULL DEFAULT 'Task';
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.PlaybookTasks') AND name = 'TargetStageId')
+    ALTER TABLE dbo.PlaybookTasks ADD TargetStageId INT NULL;
+GO

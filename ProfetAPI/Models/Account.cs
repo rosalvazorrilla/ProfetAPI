@@ -48,6 +48,11 @@ public class Account
     public DateTime? SmtpVerifiedAt { get; set; }
     public string? SmtpLastError   { get; set; }
 
+    // ── Meta Business Manager ────────────────────────────────────────────────────
+    /// <summary>ID numérico de la cuenta de anuncios de Meta (sin prefijo "act_")</summary>
+    [StringLength(50)]
+    public string? MetaAdAccountId { get; set; }
+
     // Propiedades de navegación
     public virtual Customer Customer { get; set; } = null!;
     public virtual ICollection<AccountInternalUser> InternalUsers { get; set; } = new List<AccountInternalUser>();

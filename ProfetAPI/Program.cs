@@ -80,6 +80,11 @@ builder.Services.AddScoped<ProfetAPI.Services.IEmailService, ProfetAPI.Services.
 // --- 5d. Servicio de Webhooks Salientes ---
 builder.Services.AddScoped<ProfetAPI.Services.IWebhookDispatcherService, ProfetAPI.Services.WebhookDispatcherService>();
 
+// --- 5e. Meta Ads Insights ---
+builder.Services.AddScoped<ProfetAPI.Services.MetaAdsService>();
+builder.Services.AddScoped<ProfetAPI.Services.AutomationExecutorService>();
+builder.Services.AddScoped<ProfetAPI.Services.PlaybookService>();
+
 // --- 5b. Servicios de Controladores, SignalR y Swagger ---
 builder.Services.AddSignalR();
 builder.Services.AddControllers();

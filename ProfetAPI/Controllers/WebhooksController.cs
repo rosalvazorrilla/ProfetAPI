@@ -322,6 +322,104 @@ public class WebhooksController : ControllerBase
         return Ok(forms);
     }
 
+    // ── GET /api/webhooks/{id}/meta/account-fields ───────────────────────────────
+
+    [HttpGet("{id:int}/meta/account-fields")]
+    [SwaggerOperation(Summary = "Campos activados y disponibles del account para el mapeo de formulario Meta")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> GetAccountFields(int id, [FromQuery] int? accountId)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        if (id != 0)
+        {
+            var exists = await _db.AccountWebhooks.AnyAsync(x => x.WebhookId == id && x.AccountId == resolved);
+            if (!exists) return NotFound();
+        }
+
+        // Campos que el account ya tiene activados
+        var activated = await _db.AccountCustomFields
+            .Where(a => a.AccountId == resolved)
+            .Select(a => new { a.FieldId, a.CustomFieldDefinition.FieldCode, a.CustomFieldDefinition.FieldName, a.CustomFieldDefinition.FieldType })
+            .OrderBy(a => a.FieldName)
+            .ToListAsync();
+
+        var activatedIds = activated.Select(a => a.FieldId).ToHashSet();
+
+        // Campos del pool global que aún NO tiene activados (excluye sistema)
+        var available = await _db.CustomFieldDefinitions
+            .Where(f => !f.IsSystem && !activatedIds.Contains(f.FieldId))
+            .Select(f => new { f.FieldId, f.FieldCode, f.FieldName, f.FieldType })
+            .OrderBy(f => f.FieldName)
+            .ToListAsync();
+
+        return Ok(new { activated, available });
+    }
+
+    // ── POST /api/webhooks/{id}/meta/account-fields/activate ─────────────────────
+
+    [HttpPost("{id:int}/meta/account-fields/activate")]
+    [SwaggerOperation(Summary = "Activa un campo para el account (y opcionalmente lo crea en el pool global)")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> ActivateAccountField(int id, [FromQuery] int? accountId, [FromBody] ActivateFieldRequest req)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        if (id != 0)
+        {
+            var exists = await _db.AccountWebhooks.AnyAsync(x => x.WebhookId == id && x.AccountId == resolved);
+            if (!exists) return NotFound();
+        }
+
+        int fieldId;
+
+        if (req.FieldId.HasValue)
+        {
+            // Activar campo existente del pool
+            fieldId = req.FieldId.Value;
+            var def = await _db.CustomFieldDefinitions.FindAsync(fieldId);
+            if (def == null) return BadRequest("Campo no encontrado en el pool global.");
+        }
+        else
+        {
+            // Crear nuevo campo en el pool global y activarlo
+            if (string.IsNullOrWhiteSpace(req.FieldName)) return BadRequest("FieldName es requerido para crear un nuevo campo.");
+            var fieldCode = (req.FieldCode?.Trim().ToLower() ?? req.FieldName!.Trim().ToLower())
+                .Replace(" ", "_");
+
+            // Evitar duplicados de código
+            var suffix = 0;
+            var baseCode = fieldCode;
+            while (await _db.CustomFieldDefinitions.AnyAsync(f => f.FieldCode == fieldCode))
+                fieldCode = $"{baseCode}_{++suffix}";
+
+            var newDef = new CustomFieldDefinition { FieldCode = fieldCode, FieldName = req.FieldName.Trim(), FieldType = "Text" };
+            _db.CustomFieldDefinitions.Add(newDef);
+            await _db.SaveChangesAsync();
+            fieldId = newDef.FieldId;
+        }
+
+        // Activar si aún no está activado
+        var alreadyActive = await _db.AccountCustomFields.AnyAsync(a => a.AccountId == resolved && a.FieldId == fieldId);
+        if (!alreadyActive)
+        {
+            _db.AccountCustomFields.Add(new AccountCustomField { AccountId = resolved.Value, FieldId = fieldId, IsVisibleOnCard = false });
+            await _db.SaveChangesAsync();
+        }
+
+        var result = await _db.CustomFieldDefinitions
+            .Where(f => f.FieldId == fieldId)
+            .Select(f => new { f.FieldId, f.FieldCode, f.FieldName, f.FieldType })
+            .FirstAsync();
+
+        return Ok(result);
+    }
+
     // ── GET /api/webhooks/{id}/meta/form-questions?formId= ───────────────────────
 
     [HttpGet("{id:int}/meta/form-questions")]
@@ -367,6 +465,46 @@ public class WebhooksController : ControllerBase
             }
 
         return Ok(new { formId = targetFormId, questions });
+    }
+
+    // ── PATCH /api/webhooks/{id}/toggle ───────────────────────────────────────
+
+    [HttpPatch("{id:int}/toggle")]
+    [SwaggerOperation(Summary = "Activar o desactivar un webhook")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> Toggle(int id, [FromQuery] int? accountId)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        var wh = await _db.AccountWebhooks
+            .FirstOrDefaultAsync(x => x.WebhookId == id && x.AccountId == resolved);
+        if (wh == null) return NotFound();
+
+        wh.IsActive = !wh.IsActive;
+        await _db.SaveChangesAsync();
+        return Ok(new { wh.WebhookId, wh.IsActive });
+    }
+
+    // ── PUT /api/webhooks/{id}/formatter ──────────────────────────────────────
+
+    [HttpPut("{id:int}/formatter")]
+    [SwaggerOperation(Summary = "Guardar reglas de transformación (formatter) del webhook")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> SaveFormatter(int id, [FromQuery] int? accountId, [FromBody] FormatterSaveRequest req)
+    {
+        var resolved = await ResolveAccountId(accountId);
+        if (resolved == null) return BadRequest();
+
+        var wh = await _db.AccountWebhooks
+            .FirstOrDefaultAsync(x => x.WebhookId == id && x.AccountId == resolved);
+        if (wh == null) return NotFound();
+
+        wh.FormatterJson = req.FormatterJson?.Trim();
+        await _db.SaveChangesAsync();
+        return Ok(new { wh.WebhookId, saved = true });
     }
 
     // ── POST /api/webhooks/{id}/regenerate-key ─────────────────────────────────
@@ -429,6 +567,8 @@ public class WebhooksController : ControllerBase
         MetaFormId           = r.MetaFormId?.Trim(),
         MetaFormName         = r.MetaFormName?.Trim(),
         FieldMappingJson     = r.FieldMappingJson?.Trim(),
+        FormatterJson        = r.FormatterJson?.Trim(),
+        MetaAdAccountId      = r.MetaAdAccountId?.Trim(),
         DestFunnelId         = r.DestFunnelId,
         DestLeadStatus       = r.DestLeadStatus ?? "Nuevo",
         // Outgoing
@@ -457,6 +597,8 @@ public class WebhooksController : ControllerBase
         if (r.MetaFormId           != null) wh.MetaFormId           = r.MetaFormId.Trim();
         if (r.MetaFormName         != null) wh.MetaFormName         = r.MetaFormName.Trim();
         if (r.FieldMappingJson     != null) wh.FieldMappingJson     = r.FieldMappingJson.Trim();
+        if (r.FormatterJson        != null) wh.FormatterJson        = r.FormatterJson.Trim();
+        if (r.MetaAdAccountId      != null) wh.MetaAdAccountId      = r.MetaAdAccountId.Trim();
 
         if (r.TriggerEvent   != null) wh.TriggerEvent   = r.TriggerEvent.Trim();
         if (r.TargetUrl      != null) wh.TargetUrl      = r.TargetUrl.Trim();
@@ -466,7 +608,8 @@ public class WebhooksController : ControllerBase
     private static object ToDto(AccountWebhook w) => new
     {
         w.WebhookId, w.AccountId, w.Name, w.Direction, w.Platform, w.ActionType,
-        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaPageName, w.MetaFormId, w.MetaFormName, w.FieldMappingJson, w.MetaVerifyToken,
+        w.WebhookKey, w.MetaAppId, w.MetaPageId, w.MetaPageName, w.MetaFormId, w.MetaFormName,
+        w.FieldMappingJson, w.FormatterJson, w.MetaAdAccountId, w.MetaVerifyToken,
         w.DestFunnelId, w.DestLeadStatus,
         w.TriggerEvent, w.TargetUrl,
         w.IsActive, w.CreatedAt, w.LastTriggeredAt, w.TriggerCount, w.LastError,
@@ -503,6 +646,8 @@ public record SaveWebhookRequest(
     string? MetaFormId          = null,
     string? MetaFormName        = null,
     string? FieldMappingJson    = null,
+    string? FormatterJson       = null,
+    string? MetaAdAccountId     = null,
     int?    DestFunnelId        = null,
     string? DestLeadStatus      = "Nuevo",
     // Outgoing
@@ -510,3 +655,15 @@ public record SaveWebhookRequest(
     string? TargetUrl           = null,
     string? OutgoingSecret      = null
 );
+
+public class FormatterSaveRequest
+{
+    public string? FormatterJson { get; set; }
+}
+
+public class ActivateFieldRequest
+{
+    public int?    FieldId   { get; set; }   // Activar campo existente del pool
+    public string? FieldCode { get; set; }   // Para campo nuevo (opcional, se genera desde FieldName si no viene)
+    public string? FieldName { get; set; }   // Para campo nuevo
+}

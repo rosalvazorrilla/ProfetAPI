@@ -40,6 +40,12 @@ public class AccountWebhook
     public string? MetaFormName        { get; set; }
     /// <summary>JSON: {"name":"full_name","email":"email","phone":"phone_number",...} — CRM field → Meta question key</summary>
     public string? FieldMappingJson    { get; set; }
+    /// <summary>JSON array de reglas FormatterRule[] — transformaciones aplicadas al payload antes de crear el lead</summary>
+    public string? FormatterJson       { get; set; }
+
+    /// <summary>ID de la cuenta de anuncios de Meta Business (sin prefijo "act_"), para cruzar métricas de inversión</summary>
+    [MaxLength(50)]
+    public string? MetaAdAccountId     { get; set; }
 
     // Destino en Profet para leads/contactos entrantes
     public int?    DestFunnelId   { get; set; }

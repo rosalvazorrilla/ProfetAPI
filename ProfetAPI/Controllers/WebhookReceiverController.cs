@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProfetAPI.Data;
 using ProfetAPI.Models;
 using Swashbuckle.AspNetCore.Annotations;
+using ProfetAPI.Services;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -246,7 +247,7 @@ public class WebhookReceiverController : ControllerBase
                 }
 
             // Mapeo: JSON guardado es { metaKey → crmField } (ej: {"full_name":"name","email":"email"})
-            // Construimos un diccionario inverso: crmField → valor del campo Meta
+            // Construimos un diccionario: crmField → valor del campo Meta
             var crmValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (!string.IsNullOrEmpty(wh.FieldMappingJson))
             {
@@ -261,6 +262,9 @@ public class WebhookReceiverController : ControllerBase
                 }
                 catch { }
             }
+
+            // Aplicar reglas del formatter (transformaciones configuradas en el wizard)
+            crmValues = FormatterEngine.Apply(wh.FormatterJson, fields_map, crmValues);
 
             // Obtener valor de un campo CRM: usa mapping guardado primero, luego fallback a nombres estándar
             bool hasMapping = crmValues.Count > 0;
