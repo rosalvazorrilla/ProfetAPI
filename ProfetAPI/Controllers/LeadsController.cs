@@ -641,6 +641,20 @@ public class LeadsController : ControllerBase
 
         lead.Status = model.Status;
         await _context.SaveChangesAsync();
+
+        // Disparar automatizaciones "LeadUpdated" para esta cuenta
+        if (lead.AccountId is int updAccId)
+            _ = Task.Run(() => _automations.FireAsync(updAccId, "LeadUpdated", new Dictionary<string, string>
+            {
+                ["_leadId"]       = lead.LeadId.ToString(),
+                ["name"]          = lead.Name          ?? "",
+                ["email"]         = lead.Email         ?? "",
+                ["phone"]         = lead.Phone         ?? "",
+                ["company"]       = lead.Company       ?? "",
+                ["prospectSource"]= lead.ProspectSource?? "",
+                ["status"]        = lead.Status,
+            }));
+
         return Ok(new { leadId = lead.LeadId, status = lead.Status });
     }
 

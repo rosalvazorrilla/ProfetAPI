@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using ProfetAPI.Data;
 using ProfetAPI.Models;
 using ProfetAPI.Services;
@@ -54,6 +55,8 @@ public class AutomationsController : ControllerBase
                 webhookUrl = r.WebhookKey != null
                     ? $"/api/receive/auto/{r.WebhookKey}"
                     : (string?)null,
+                r.VerifyToken,
+                hasMetaToken = r.MetaPageToken != null,
                 r.ConditionsJson, r.CreatedAt,
                 steps = r.Steps.Select(s => new { s.StepId, s.StepOrder, s.StepType, s.ConfigJson, s.IsActive }),
                 lastRun = _db.AutomationLogs
@@ -103,6 +106,10 @@ public class AutomationsController : ControllerBase
             WebhookKey      = req.TriggerType == "WebhookIncoming"
                 ? Guid.NewGuid().ToString("N")[..12]
                 : null,
+            VerifyToken     = req.TriggerType == "WebhookIncoming"
+                ? Guid.NewGuid().ToString("N")[..16]
+                : null,
+            MetaPageToken   = string.IsNullOrWhiteSpace(req.MetaPageToken) ? null : req.MetaPageToken.Trim(),
             CreatedAt = DateTime.UtcNow,
         };
         _db.AutomationRules.Add(rule);
@@ -133,11 +140,21 @@ public class AutomationsController : ControllerBase
         rule.TriggerPlatform = req.TriggerPlatform?.Trim();
         rule.ConditionsJson  = req.ConditionsJson;
 
-        // Regenerar key si cambia a WebhookIncoming y no tenía
-        if (req.TriggerType == "WebhookIncoming" && rule.WebhookKey == null)
-            rule.WebhookKey = Guid.NewGuid().ToString("N")[..12];
-        else if (req.TriggerType != "WebhookIncoming")
-            rule.WebhookKey = null;
+        // Regenerar key/token si cambia a WebhookIncoming y no tenía
+        if (req.TriggerType == "WebhookIncoming")
+        {
+            rule.WebhookKey  ??= Guid.NewGuid().ToString("N")[..12];
+            rule.VerifyToken ??= Guid.NewGuid().ToString("N")[..16];
+            // Solo sobrescribir el token de Meta si el front envía uno nuevo (no reenvía el existente)
+            if (!string.IsNullOrWhiteSpace(req.MetaPageToken))
+                rule.MetaPageToken = req.MetaPageToken.Trim();
+        }
+        else
+        {
+            rule.WebhookKey    = null;
+            rule.VerifyToken   = null;
+            rule.MetaPageToken = null;
+        }
 
         // Replace steps
         _db.AutomationSteps.RemoveRange(rule.Steps);
@@ -224,6 +241,8 @@ public class AutomationsController : ControllerBase
     {
         r.RuleId, r.Name, r.IsActive, r.TriggerType, r.TriggerPlatform,
         webhookUrl  = r.WebhookKey != null ? $"/api/receive/auto/{r.WebhookKey}" : null,
+        r.VerifyToken,
+        hasMetaToken = r.MetaPageToken != null,
         r.ConditionsJson, r.CreatedAt,
         steps = r.Steps.OrderBy(s => s.StepOrder).Select(s => new
         {
@@ -239,13 +258,42 @@ public class AutomationsController : ControllerBase
 [SwaggerTag("CRM — Receptor genérico de webhooks de automatización")]
 public class AutomationWebhookReceiverController : ControllerBase
 {
-    private readonly ApplicationDbContext      _db;
-    private readonly AutomationExecutorService _executor;
+    private readonly ApplicationDbContext _db;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IHttpClientFactory   _httpFactory;
 
-    public AutomationWebhookReceiverController(ApplicationDbContext db, AutomationExecutorService executor)
+    public AutomationWebhookReceiverController(
+        ApplicationDbContext db, IServiceScopeFactory scopeFactory, IHttpClientFactory httpFactory)
     {
-        _db       = db;
-        _executor = executor;
+        _db           = db;
+        _scopeFactory = scopeFactory;
+        _httpFactory  = httpFactory;
+    }
+
+    /// <summary>
+    /// GET /api/receive/auto/{key}
+    /// Handshake de verificación estilo Meta Lead Ads:
+    /// ?hub.mode=subscribe&amp;hub.verify_token=...&amp;hub.challenge=... → devuelve el challenge si el token coincide.
+    /// Así la misma URL sirve como "Callback URL" al conectar Meta (u otra plataforma que verifique).
+    /// </summary>
+    [HttpGet("{key}")]
+    [AllowAnonymous]
+    [SwaggerOperation(Summary = "Verificación de webhook (handshake tipo Meta)")]
+    public async Task<IActionResult> Verify(string key,
+        [FromQuery(Name = "hub.mode")] string? mode,
+        [FromQuery(Name = "hub.verify_token")] string? token,
+        [FromQuery(Name = "hub.challenge")] string? challenge)
+    {
+        var rule = await _db.AutomationRules.AsNoTracking()
+            .FirstOrDefaultAsync(r => r.WebhookKey == key && !r.Deleted);
+        if (rule == null) return NotFound();
+
+        // Meta envía GET con hub.* para validar la URL antes de suscribir el webhook
+        if (mode == "subscribe" && !string.IsNullOrEmpty(token)
+            && !string.IsNullOrEmpty(rule.VerifyToken) && token == rule.VerifyToken)
+            return Content(challenge ?? "", "text/plain");
+
+        return Forbid();
     }
 
     /// <summary>
@@ -259,29 +307,119 @@ public class AutomationWebhookReceiverController : ControllerBase
     [SwaggerResponse(404, "Clave no encontrada")]
     public async Task<IActionResult> Receive(string key)
     {
-        var rule = await _db.AutomationRules
-            .Include(r => r.Steps.Where(s => s.IsActive).OrderBy(s => s.StepOrder))
+        var rule = await _db.AutomationRules.AsNoTracking()
             .FirstOrDefaultAsync(r => r.WebhookKey == key && r.IsActive && !r.Deleted);
-
         if (rule == null) return NotFound(new { message = "Webhook no encontrado o inactivo." });
 
-        // Parse body as flat string dictionary
-        Dictionary<string, string> fields;
+        // Leer el cuerpo crudo
+        string body;
         try
         {
             using var reader = new System.IO.StreamReader(Request.Body);
-            var body = await reader.ReadToEndAsync();
-            fields = FlattenJson(body);
+            body = await reader.ReadToEndAsync();
         }
-        catch
+        catch { body = ""; }
+
+        var ruleId    = rule.RuleId;
+        var metaToken = rule.MetaPageToken;
+        var leadgenIds = ExtractMetaLeadgenIds(body);
+
+        // Fire and forget con SCOPE PROPIO (evita usar el DbContext del request ya liberado).
+        // Responder 200 rápido es requisito de Meta (<5s).
+        _ = Task.Run(async () =>
         {
-            fields = new Dictionary<string, string>();
+            using var scope = _scopeFactory.CreateScope();
+            var db   = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var exec = scope.ServiceProvider.GetRequiredService<AutomationExecutorService>();
+
+            var freshRule = await db.AutomationRules
+                .Include(r => r.Steps.Where(s => s.IsActive).OrderBy(s => s.StepOrder))
+                .FirstOrDefaultAsync(r => r.RuleId == ruleId);
+            if (freshRule == null) return;
+
+            if (leadgenIds.Count > 0 && !string.IsNullOrWhiteSpace(metaToken))
+            {
+                // Meta Lead Ads: cada leadgen_id se resuelve contra la Graph API para traer los campos reales
+                foreach (var lid in leadgenIds)
+                {
+                    var fields = await FetchMetaLeadAsync(lid, metaToken!);
+                    if (fields.Count > 0) await exec.ExecuteRuleAsync(freshRule, fields);
+                }
+            }
+            else
+            {
+                await exec.ExecuteRuleAsync(freshRule, FlattenJson(body));
+            }
+        });
+
+        return Ok(new { received = true, ruleId });
+    }
+
+    /// <summary>Extrae los leadgen_id de un payload de Meta Lead Ads (object=page → entry[].changes[].value.leadgen_id).</summary>
+    private static List<string> ExtractMetaLeadgenIds(string json)
+    {
+        var ids = new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return ids;
+            if (!root.TryGetProperty("object", out var obj) || obj.GetString() != "page") return ids;
+            if (!root.TryGetProperty("entry", out var entry) || entry.ValueKind != JsonValueKind.Array) return ids;
+
+            foreach (var e in entry.EnumerateArray())
+            {
+                if (!e.TryGetProperty("changes", out var changes) || changes.ValueKind != JsonValueKind.Array) continue;
+                foreach (var c in changes.EnumerateArray())
+                {
+                    if (c.TryGetProperty("value", out var val) &&
+                        val.TryGetProperty("leadgen_id", out var lid))
+                    {
+                        var s = lid.ValueKind == JsonValueKind.String ? lid.GetString() : lid.ToString();
+                        if (!string.IsNullOrWhiteSpace(s)) ids.Add(s!);
+                    }
+                }
+            }
         }
+        catch { }
+        return ids;
+    }
 
-        // Fire and forget — respond 200 immediately, execute async
-        _ = Task.Run(() => _executor.ExecuteRuleAsync(rule, fields));
+    /// <summary>Consulta la Graph API de Meta con el Page Access Token y aplana field_data en un diccionario.</summary>
+    private async Task<Dictionary<string, string>> FetchMetaLeadAsync(string leadgenId, string pageToken)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var client = _httpFactory.CreateClient();
+            var url = $"https://graph.facebook.com/v21.0/{leadgenId}"
+                    + $"?fields=field_data,form_id,ad_id,campaign_id,created_time"
+                    + $"&access_token={Uri.EscapeDataString(pageToken)}";
+            var resp = await client.GetAsync(url);
+            if (!resp.IsSuccessStatusCode) return result;
 
-        return Ok(new { received = true, ruleId = rule.RuleId });
+            var json = await resp.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("field_data", out var fd) && fd.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var f in fd.EnumerateArray())
+                {
+                    var name = f.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    string? value = null;
+                    if (f.TryGetProperty("values", out var vs) && vs.ValueKind == JsonValueKind.Array && vs.GetArrayLength() > 0)
+                        value = vs[0].GetString();
+                    if (!string.IsNullOrWhiteSpace(name)) result[name] = value ?? "";
+                }
+            }
+            foreach (var k in new[] { "form_id", "ad_id", "campaign_id", "created_time" })
+                if (root.TryGetProperty(k, out var v)) result[k] = v.ToString();
+            result["leadgen_id"] = leadgenId;
+            result["prospectSource"] = "Meta Lead Ads";
+        }
+        catch { }
+        return result;
     }
 
     /// <summary>Aplana un JSON anidado a diccionario plano: "address.city" → "city"</summary>
@@ -326,6 +464,7 @@ public class SaveAutomationRequest
     public bool   IsActive        { get; set; } = true;
     public string TriggerType     { get; set; } = "WebhookIncoming";
     public string? TriggerPlatform{ get; set; }
+    public string? MetaPageToken  { get; set; }
     public string? ConditionsJson { get; set; }
     public List<StepRequest>? Steps { get; set; }
 }

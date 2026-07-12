@@ -2817,3 +2817,13 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.PlaybookTasks') AND name = 'TargetStageId')
     ALTER TABLE dbo.PlaybookTasks ADD TargetStageId INT NULL;
 GO
+
+-- AutomationRules: token de verificacion para handshake tipo Meta (GET hub.challenge)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'VerifyToken')
+    ALTER TABLE dbo.AutomationRules ADD VerifyToken NVARCHAR(80) NULL;
+GO
+
+-- AutomationRules: Page Access Token de Meta para traer los campos del lead via Graph API
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'MetaPageToken')
+    ALTER TABLE dbo.AutomationRules ADD MetaPageToken NVARCHAR(1024) NULL;
+GO

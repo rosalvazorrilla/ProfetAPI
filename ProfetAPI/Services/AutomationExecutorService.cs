@@ -15,6 +15,7 @@ public class AutomationExecutorService(
     ApplicationDbContext db,
     IHttpClientFactory httpFactory,
     IEmailService emailService,
+    PlaybookService playbooks,
     ILogger<AutomationExecutorService> logger)
 {
     // ── Public entry points ──────────────────────────────────────────────────
@@ -130,11 +131,11 @@ public class AutomationExecutorService(
         {
             AccountId      = accountId,
             CampaignId     = 0,
-            Name           = Get(fields, "name", "email", "full_name"),
+            Name           = Get(fields, "name", "full_name", "nombre", "email"),
             Email          = Get(fields, "email"),
             Phone          = Get(fields, "phone", "phone_number", "teléfono"),
-            Company        = Get(fields, "company", "empresa"),
-            Position       = Get(fields, "position", "cargo", "position"),
+            Company        = Get(fields, "company", "empresa", "company_name"),
+            Position       = Get(fields, "position", "cargo", "job_title"),
             City           = Get(fields, "city", "ciudad"),
             ProspectSource = Get(fields, "prospectSource", "prospect_source", "fuente", "source"),
             CampaignName   = Get(fields, "campaignName", "campaign_name", "campaña"),
@@ -154,6 +155,9 @@ public class AutomationExecutorService(
 
         // Poner el leadId en el contexto para pasos posteriores
         fields["_leadId"] = lead.LeadId.ToString();
+
+        // Aplicar el playbook predeterminado (igual que un lead creado manualmente)
+        await playbooks.ApplyDefaultAsync(accountId, lead.LeadId, ownerId);
         return true;
     }
 

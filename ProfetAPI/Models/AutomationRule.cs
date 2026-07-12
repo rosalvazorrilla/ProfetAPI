@@ -32,6 +32,20 @@ public class AutomationRule
     public string? WebhookKey { get; set; }
 
     /// <summary>
+    /// Token de verificación para plataformas que hacen handshake GET (ej. Meta Lead Ads:
+    /// GET ?hub.mode=subscribe&amp;hub.verify_token=...&amp;hub.challenge=...). Se pega en la config del webhook de la plataforma.
+    /// </summary>
+    [MaxLength(80)]
+    public string? VerifyToken { get; set; }
+
+    /// <summary>
+    /// Page Access Token de Meta. Necesario para que, al recibir un leadgen_id,
+    /// el receptor consulte la Graph API y traiga los campos reales del lead (name, email, phone…).
+    /// </summary>
+    [MaxLength(1024)]
+    public string? MetaPageToken { get; set; }
+
+    /// <summary>
     /// JSON: [{ "field": "prospectSource", "op": "eq", "value": "Meta Lead Ads" }, ...]
     /// Ops soportados: eq | neq | contains | gt | lt
     /// </summary>

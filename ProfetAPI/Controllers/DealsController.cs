@@ -14,8 +14,13 @@ namespace ProfetAPI.Controllers;
 public class DealsController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
+    private readonly ProfetAPI.Services.AutomationExecutorService _automations;
 
-    public DealsController(ApplicationDbContext context) => _context = context;
+    public DealsController(ApplicationDbContext context, ProfetAPI.Services.AutomationExecutorService automations)
+    {
+        _context     = context;
+        _automations = automations;
+    }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     private string? CurrentUserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
@@ -420,7 +425,44 @@ public class DealsController : ControllerBase
 
         deal.StageId = model.StageId;
         await _context.SaveChangesAsync();
+
+        // ── Disparar automatizaciones de oportunidad ──────────────────────────
+        var stageName = model.StageId.HasValue
+            ? await _context.Stages.Where(s => s.StageId == model.StageId.Value)
+                                   .Select(s => s.Name).FirstOrDefaultAsync() ?? ""
+            : "";
+
+        var fields = new Dictionary<string, string>
+        {
+            ["_dealId"]   = deal.DealId.ToString(),
+            ["dealName"]  = deal.DealName ?? "",
+            ["stageId"]   = deal.StageId?.ToString() ?? "",
+            ["stageName"] = stageName,
+            ["amount"]    = deal.QuotedAmount?.ToString() ?? "",
+            ["status"]    = deal.Status,
+        };
+
+        var accId = deal.AccountId;
+        // StageChanged siempre; DealWon/DealLost si la etapa destino lo indica por su nombre
+        _ = Task.Run(async () =>
+        {
+            await _automations.FireAsync(accId, "StageChanged", new Dictionary<string, string>(fields));
+            var kind = ClassifyStage(stageName);
+            if (kind == "won")  await _automations.FireAsync(accId, "DealWon",  new Dictionary<string, string>(fields));
+            if (kind == "lost") await _automations.FireAsync(accId, "DealLost", new Dictionary<string, string>(fields));
+        });
+
         return Ok(new { dealId = deal.DealId, stageId = deal.StageId });
+    }
+
+    /// <summary>Clasifica una etapa como "won"/"lost"/"" según palabras clave en su nombre.</summary>
+    private static string ClassifyStage(string name)
+    {
+        var n = name.ToLowerInvariant()
+            .Replace("á", "a").Replace("é", "e").Replace("í", "i").Replace("ó", "o").Replace("ú", "u");
+        if (n.Contains("ganad") || n.Contains("won") || n.Contains("cerrada ganada") || n.Contains("exito")) return "won";
+        if (n.Contains("perdid") || n.Contains("lost") || n.Contains("cerrada perdida") || n.Contains("descartad")) return "lost";
+        return "";
     }
 
     // GET /api/deals/accounts?customerId=&activeOnly=true
