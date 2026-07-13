@@ -119,6 +119,10 @@ builder.Services.AddEndpointsApiExplorer();
 
 builder.Services.AddSwaggerGen(c =>
 {
+    // Resolver rutas en conflicto (ej. dos acciones con el mismo método/ruta) tomando la primera,
+    // para que la generación de Swagger no falle (afecta solo la doc, no el ruteo real).
+    c.ResolveConflictingActions(apiDescriptions => apiDescriptions.First());
+
     // A. Informaci�n B�sica
     c.SwaggerDoc("v1", new OpenApiInfo
     {
