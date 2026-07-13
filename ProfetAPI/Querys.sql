@@ -2926,3 +2926,10 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'MetaFormId')
     ALTER TABLE dbo.AutomationRules ADD MetaFormId NVARCHAR(80) NULL;
 GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'MetaPageName')
+    ALTER TABLE dbo.AutomationRules ADD MetaPageName NVARCHAR(200) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'MetaFormName')
+    ALTER TABLE dbo.AutomationRules ADD MetaFormName NVARCHAR(200) NULL;
+GO

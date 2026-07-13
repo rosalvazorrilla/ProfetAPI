@@ -53,6 +53,14 @@ public class AutomationRule
     [MaxLength(80)]
     public string? MetaFormId { get; set; }
 
+    /// <summary>Nombre de la página (solo para mostrar en la UI; no se usa en lógica).</summary>
+    [MaxLength(200)]
+    public string? MetaPageName { get; set; }
+
+    /// <summary>Nombre del formulario (solo para mostrar en la UI; no se usa en lógica).</summary>
+    [MaxLength(200)]
+    public string? MetaFormName { get; set; }
+
     /// <summary>
     /// JSON: [{ "field": "prospectSource", "op": "eq", "value": "Meta Lead Ads" }, ...]
     /// Ops soportados: eq | neq | contains | gt | lt

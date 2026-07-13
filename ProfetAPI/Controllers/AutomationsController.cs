@@ -60,7 +60,7 @@ public class AutomationsController : ControllerBase
                 webhookUrl = r.WebhookKey != null
                     ? $"/api/receive/auto/{r.WebhookKey}"
                     : (string?)null,
-                r.VerifyToken, r.MetaPageId, r.MetaFormId,
+                r.VerifyToken, r.MetaPageId, r.MetaFormId, r.MetaPageName, r.MetaFormName,
                 hasMetaToken = r.MetaPageToken != null,
                 r.ConditionsJson, r.CreatedAt,
                 steps = r.Steps.Select(s => new { s.StepId, s.StepOrder, s.StepType, s.ConfigJson, s.IsActive }),
@@ -117,6 +117,8 @@ public class AutomationsController : ControllerBase
             MetaPageToken   = string.IsNullOrWhiteSpace(req.MetaPageToken) ? null : _secrets.Protect(req.MetaPageToken.Trim()),
             MetaPageId      = string.IsNullOrWhiteSpace(req.MetaPageId) ? null : req.MetaPageId.Trim(),
             MetaFormId      = string.IsNullOrWhiteSpace(req.MetaFormId) ? null : req.MetaFormId.Trim(),
+            MetaPageName    = string.IsNullOrWhiteSpace(req.MetaPageName) ? null : req.MetaPageName.Trim(),
+            MetaFormName    = string.IsNullOrWhiteSpace(req.MetaFormName) ? null : req.MetaFormName.Trim(),
             CreatedAt = DateTime.UtcNow,
         };
         _db.AutomationRules.Add(rule);
@@ -155,8 +157,10 @@ public class AutomationsController : ControllerBase
             // Solo sobrescribir el token de Meta si el front envía uno nuevo (no reenvía el existente)
             if (!string.IsNullOrWhiteSpace(req.MetaPageToken))
                 rule.MetaPageToken = _secrets.Protect(req.MetaPageToken.Trim());
-            rule.MetaPageId = string.IsNullOrWhiteSpace(req.MetaPageId) ? null : req.MetaPageId.Trim();
-            rule.MetaFormId = string.IsNullOrWhiteSpace(req.MetaFormId) ? null : req.MetaFormId.Trim();
+            rule.MetaPageId   = string.IsNullOrWhiteSpace(req.MetaPageId) ? null : req.MetaPageId.Trim();
+            rule.MetaFormId   = string.IsNullOrWhiteSpace(req.MetaFormId) ? null : req.MetaFormId.Trim();
+            rule.MetaPageName = string.IsNullOrWhiteSpace(req.MetaPageName) ? null : req.MetaPageName.Trim();
+            rule.MetaFormName = string.IsNullOrWhiteSpace(req.MetaFormName) ? null : req.MetaFormName.Trim();
         }
         else
         {
@@ -496,6 +500,8 @@ public class SaveAutomationRequest
     public string? MetaPageToken  { get; set; }
     public string? MetaPageId     { get; set; }
     public string? MetaFormId     { get; set; }
+    public string? MetaPageName   { get; set; }
+    public string? MetaFormName   { get; set; }
     public string? ConditionsJson { get; set; }
     public List<StepRequest>? Steps { get; set; }
 }
