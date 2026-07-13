@@ -49,6 +49,10 @@ public class AutomationRule
     [MaxLength(80)]
     public string? MetaPageId { get; set; }
 
+    /// <summary>Formulario de Lead Ads elegido (opcional): si se define, solo procesa leads de ese formulario.</summary>
+    [MaxLength(80)]
+    public string? MetaFormId { get; set; }
+
     /// <summary>
     /// JSON: [{ "field": "prospectSource", "op": "eq", "value": "Meta Lead Ads" }, ...]
     /// Ops soportados: eq | neq | contains | gt | lt

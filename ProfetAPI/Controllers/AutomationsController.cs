@@ -60,7 +60,7 @@ public class AutomationsController : ControllerBase
                 webhookUrl = r.WebhookKey != null
                     ? $"/api/receive/auto/{r.WebhookKey}"
                     : (string?)null,
-                r.VerifyToken, r.MetaPageId,
+                r.VerifyToken, r.MetaPageId, r.MetaFormId,
                 hasMetaToken = r.MetaPageToken != null,
                 r.ConditionsJson, r.CreatedAt,
                 steps = r.Steps.Select(s => new { s.StepId, s.StepOrder, s.StepType, s.ConfigJson, s.IsActive }),
@@ -116,6 +116,7 @@ public class AutomationsController : ControllerBase
                 : null,
             MetaPageToken   = string.IsNullOrWhiteSpace(req.MetaPageToken) ? null : _secrets.Protect(req.MetaPageToken.Trim()),
             MetaPageId      = string.IsNullOrWhiteSpace(req.MetaPageId) ? null : req.MetaPageId.Trim(),
+            MetaFormId      = string.IsNullOrWhiteSpace(req.MetaFormId) ? null : req.MetaFormId.Trim(),
             CreatedAt = DateTime.UtcNow,
         };
         _db.AutomationRules.Add(rule);
@@ -155,6 +156,7 @@ public class AutomationsController : ControllerBase
             if (!string.IsNullOrWhiteSpace(req.MetaPageToken))
                 rule.MetaPageToken = _secrets.Protect(req.MetaPageToken.Trim());
             rule.MetaPageId = string.IsNullOrWhiteSpace(req.MetaPageId) ? null : req.MetaPageId.Trim();
+            rule.MetaFormId = string.IsNullOrWhiteSpace(req.MetaFormId) ? null : req.MetaFormId.Trim();
         }
         else
         {
@@ -334,7 +336,7 @@ public class AutomationWebhookReceiverController : ControllerBase
         var metaTokenEnc = rule.MetaPageToken;   // cifrado (opcional, override manual)
         var metaPageId   = rule.MetaPageId;
         var ruleAccount  = rule.AccountId;
-        var leadgenIds   = ExtractMetaLeadgenIds(body);
+        var leadgenIds   = ExtractMetaLeadgenIds(body, rule.MetaFormId);
 
         // Fire and forget con SCOPE PROPIO (evita usar el DbContext del request ya liberado).
         // Responder 200 rápido es requisito de Meta (<5s).
@@ -375,8 +377,8 @@ public class AutomationWebhookReceiverController : ControllerBase
         return Ok(new { received = true, ruleId });
     }
 
-    /// <summary>Extrae los leadgen_id de un payload de Meta Lead Ads (object=page → entry[].changes[].value.leadgen_id).</summary>
-    private static List<string> ExtractMetaLeadgenIds(string json)
+    /// <summary>Extrae los leadgen_id de un payload de Meta Lead Ads. Si formFilter != null, solo los de ese formulario.</summary>
+    private static List<string> ExtractMetaLeadgenIds(string json, string? formFilter = null)
     {
         var ids = new List<string>();
         try
@@ -395,6 +397,13 @@ public class AutomationWebhookReceiverController : ControllerBase
                     if (c.TryGetProperty("value", out var val) &&
                         val.TryGetProperty("leadgen_id", out var lid))
                     {
+                        // Filtrar por formulario si la automatización eligió uno
+                        if (!string.IsNullOrWhiteSpace(formFilter))
+                        {
+                            var fid = val.TryGetProperty("form_id", out var f)
+                                ? (f.ValueKind == JsonValueKind.String ? f.GetString() : f.ToString()) : null;
+                            if (fid != formFilter) continue;
+                        }
                         var s = lid.ValueKind == JsonValueKind.String ? lid.GetString() : lid.ToString();
                         if (!string.IsNullOrWhiteSpace(s)) ids.Add(s!);
                     }
@@ -486,6 +495,7 @@ public class SaveAutomationRequest
     public string? TriggerPlatform{ get; set; }
     public string? MetaPageToken  { get; set; }
     public string? MetaPageId     { get; set; }
+    public string? MetaFormId     { get; set; }
     public string? ConditionsJson { get; set; }
     public List<StepRequest>? Steps { get; set; }
 }
