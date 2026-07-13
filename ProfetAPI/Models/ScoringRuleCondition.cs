@@ -33,6 +33,14 @@ public class ScoringRuleCondition
     /// <summary>ID del CustomFieldDefinition a evaluar.</summary>
     public int? FieldId { get; set; }
 
+    /// <summary>
+    /// Señal directa del lead (sin pasar por CustomFieldDefinition):
+    /// 'email' | 'company' | 'position' | 'city' | 'prospectsource' | 'adname' | 'initialmessage' | 'phone' | 'name'.
+    /// La usan las reglas automáticas generadas por IA.
+    /// </summary>
+    [MaxLength(50)]
+    public string? SignalField { get; set; }
+
     /// <summary>Valor a comparar según el tipo. Ej: "Referido", "5" (horas), "urgente".</summary>
     [MaxLength(500)]
     public string? ConditionValue { get; set; }

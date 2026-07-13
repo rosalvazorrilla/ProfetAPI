@@ -117,6 +117,15 @@ namespace ProfetAPI.Data
         public DbSet<AutomationStep> AutomationSteps { get; set; } = null!;
         public DbSet<AutomationLog>  AutomationLogs  { get; set; } = null!;
 
+        // --- DBSET PARA LINEA DE TIEMPO ---
+        public DbSet<TimelineEvent> TimelineEvents { get; set; } = null!;
+
+        // --- DBSET PARA REPORTES GUARDADOS ---
+        public DbSet<SavedReport> SavedReports { get; set; } = null!;
+
+        // --- DBSET PARA LAYOUT DEL DASHBOARD ---
+        public DbSet<DashboardLayout> DashboardLayouts { get; set; } = null!;
+
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
 
@@ -234,6 +243,12 @@ namespace ProfetAPI.Data
                 .HasOne(l => l.Account)
                 .WithMany()
                 .HasForeignKey(l => l.AccountId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.SetNull);
+            builder.Entity<Lead>()
+                .HasOne(l => l.Tier)
+                .WithMany()
+                .HasForeignKey(l => l.TierId)
                 .IsRequired(false)
                 .OnDelete(DeleteBehavior.SetNull);
             builder.Entity<Company>().ToTable("Companies");

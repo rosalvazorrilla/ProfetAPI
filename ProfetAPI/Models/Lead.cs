@@ -48,8 +48,20 @@ public class Lead
 
     public DateTime CreatedOn { get; set; }
 
+    // === SCORING (Fase 1) ===
+    /// <summary>Puntaje total persistido (respuestas + reglas automáticas).</summary>
+    public decimal? Score { get; set; }
+    /// <summary>Banda de calificación resuelta (Frío/Tibio/Caliente…).</summary>
+    public int? TierId { get; set; }
+    /// <summary>Explicación del score (sobre todo cuando lo calcula la IA).</summary>
+    public string? ScoreReasoning { get; set; }
+    public DateTime? ScoredAt { get; set; }
+    /// <summary>'Manual' | 'AI' | 'Hybrid'.</summary>
+    public string? ScoreSource { get; set; }
+
     // === NAVIGATION PROPERTIES ===
     public virtual Account? Account { get; set; }
     public virtual ApplicationUser? Owner { get; set; }
     public virtual Contact? Contact { get; set; }
+    public virtual LeadTier? Tier { get; set; }
 }

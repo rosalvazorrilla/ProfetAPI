@@ -20,11 +20,16 @@ namespace ProfetAPI.Controllers;
 public class AutomationsController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
+    private readonly SecretProtector _secrets;
     private string? UserId   => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
     private string? UserRole => User.FindFirst(ClaimTypes.Role)?.Value;
     private bool IsAdmin     => UserRole == "AdminGlobal";
 
-    public AutomationsController(ApplicationDbContext db) => _db = db;
+    public AutomationsController(ApplicationDbContext db, SecretProtector secrets)
+    {
+        _db      = db;
+        _secrets = secrets;
+    }
 
     private async Task<int?> ResolveAccountId(int? accountId)
     {
@@ -109,7 +114,7 @@ public class AutomationsController : ControllerBase
             VerifyToken     = req.TriggerType == "WebhookIncoming"
                 ? Guid.NewGuid().ToString("N")[..16]
                 : null,
-            MetaPageToken   = string.IsNullOrWhiteSpace(req.MetaPageToken) ? null : req.MetaPageToken.Trim(),
+            MetaPageToken   = string.IsNullOrWhiteSpace(req.MetaPageToken) ? null : _secrets.Protect(req.MetaPageToken.Trim()),
             CreatedAt = DateTime.UtcNow,
         };
         _db.AutomationRules.Add(rule);
@@ -147,7 +152,7 @@ public class AutomationsController : ControllerBase
             rule.VerifyToken ??= Guid.NewGuid().ToString("N")[..16];
             // Solo sobrescribir el token de Meta si el front envía uno nuevo (no reenvía el existente)
             if (!string.IsNullOrWhiteSpace(req.MetaPageToken))
-                rule.MetaPageToken = req.MetaPageToken.Trim();
+                rule.MetaPageToken = _secrets.Protect(req.MetaPageToken.Trim());
         }
         else
         {
@@ -261,13 +266,16 @@ public class AutomationWebhookReceiverController : ControllerBase
     private readonly ApplicationDbContext _db;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory   _httpFactory;
+    private readonly SecretProtector      _secrets;
 
     public AutomationWebhookReceiverController(
-        ApplicationDbContext db, IServiceScopeFactory scopeFactory, IHttpClientFactory httpFactory)
+        ApplicationDbContext db, IServiceScopeFactory scopeFactory,
+        IHttpClientFactory httpFactory, SecretProtector secrets)
     {
         _db           = db;
         _scopeFactory = scopeFactory;
         _httpFactory  = httpFactory;
+        _secrets      = secrets;
     }
 
     /// <summary>
@@ -321,7 +329,7 @@ public class AutomationWebhookReceiverController : ControllerBase
         catch { body = ""; }
 
         var ruleId    = rule.RuleId;
-        var metaToken = rule.MetaPageToken;
+        var metaToken = _secrets.Unprotect(rule.MetaPageToken);   // descifrar para usarlo
         var leadgenIds = ExtractMetaLeadgenIds(body);
 
         // Fire and forget con SCOPE PROPIO (evita usar el DbContext del request ya liberado).

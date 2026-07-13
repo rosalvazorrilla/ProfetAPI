@@ -20,6 +20,13 @@ public class LeadScoringAnswer
     /// <summary>Puntos calculados y guardados en el momento de responder.</summary>
     public decimal PointsAwarded { get; set; } = 0;
 
+    /// <summary>Origen de la respuesta: 'Manual' | 'AI'.</summary>
+    [MaxLength(20)]
+    public string? Source { get; set; }
+
+    /// <summary>Confianza 0..1 cuando la respuesta la eligió la IA.</summary>
+    public decimal? Confidence { get; set; }
+
     public virtual Lead Lead { get; set; } = null!;
     public virtual ScoringQuestion Question { get; set; } = null!;
     public virtual ScoringAnswerOption? AnswerOption { get; set; }

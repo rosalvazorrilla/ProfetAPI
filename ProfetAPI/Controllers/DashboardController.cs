@@ -246,6 +246,134 @@ public class DashboardController : ControllerBase
         });
     }
 
+    // ── GET /api/dashboard/layout?accountId= — layout de widgets del usuario (D3) ──
+    [HttpGet("layout")]
+    [SwaggerOperation(Summary = "Layout de widgets del dashboard del usuario (persistido en BD)")]
+    public async Task<IActionResult> GetLayout([FromQuery] int? accountId)
+    {
+        var acId = await ResolveLayoutAccount(accountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta." });
+
+        var layout = await _db.DashboardLayouts.AsNoTracking()
+            .Where(l => l.UserId == CurrentUserId && l.AccountId == acId)
+            .Select(l => l.LayoutJson).FirstOrDefaultAsync();
+        return Ok(new { layoutJson = layout }); // null si el usuario nunca guardó → el front usa el default
+    }
+
+    // ── PUT /api/dashboard/layout?accountId= — guardar layout ──
+    [HttpPut("layout")]
+    [SwaggerOperation(Summary = "Guardar el layout de widgets del dashboard")]
+    public async Task<IActionResult> SaveLayout([FromQuery] int? accountId, [FromBody] DashboardLayoutDto dto)
+    {
+        var acId = await ResolveLayoutAccount(accountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta." });
+
+        var existing = await _db.DashboardLayouts
+            .FirstOrDefaultAsync(l => l.UserId == CurrentUserId && l.AccountId == acId);
+        if (existing == null)
+            _db.DashboardLayouts.Add(new ProfetAPI.Models.DashboardLayout
+            {
+                UserId = CurrentUserId, AccountId = acId.Value,
+                LayoutJson = dto.LayoutJson, ModifiedOn = DateTime.UtcNow,
+            });
+        else
+        {
+            existing.LayoutJson = dto.LayoutJson;
+            existing.ModifiedOn = DateTime.UtcNow;
+        }
+        await _db.SaveChangesAsync();
+        return Ok(new { saved = true });
+    }
+
+    private async Task<int?> ResolveLayoutAccount(int? accountId)
+    {
+        if (accountId.HasValue)
+        {
+            if (IsAdminGlobal) return accountId;
+            var ok = await _db.AccountInternalUsers.AnyAsync(a => a.AccountId == accountId && a.UserId == CurrentUserId);
+            return ok ? accountId : null;
+        }
+        if (IsAdminGlobal) return null;
+        return await _db.AccountInternalUsers.Where(a => a.UserId == CurrentUserId)
+            .Select(a => (int?)a.AccountId).FirstOrDefaultAsync();
+    }
+
+    // ── GET /api/dashboard/quality?accountId=&days=30 — KPIs de calidad (tier/score) ──
+    [HttpGet("quality")]
+    [SwaggerOperation(Summary = "KPIs de calidad de lead: distribución por tier, score promedio y conversión por tier")]
+    [ProducesResponseType(200)]
+    public async Task<IActionResult> GetQuality([FromQuery] int? accountId, [FromQuery] int days = 30)
+    {
+        int resolvedAccountId;
+        if (accountId.HasValue)
+        {
+            if (!IsAdminGlobal)
+            {
+                var belongs = await _db.AccountInternalUsers
+                    .AnyAsync(a => a.AccountId == accountId && a.UserId == CurrentUserId);
+                if (!belongs) return Forbid();
+            }
+            resolvedAccountId = accountId.Value;
+        }
+        else
+        {
+            if (IsAdminGlobal) return BadRequest(new { message = "AdminGlobal debe especificar accountId." });
+            var assignment = await _db.AccountInternalUsers.FirstOrDefaultAsync(a => a.UserId == CurrentUserId);
+            if (assignment == null) return NotFound(new { message = "Sin cuenta asignada." });
+            resolvedAccountId = assignment.AccountId;
+        }
+
+        var now      = DateTime.UtcNow;
+        var curFrom  = now.AddDays(-days);
+        var prevFrom = curFrom.AddDays(-days);
+
+        var leadsQ = _db.Leads.AsNoTracking().Where(l => l.AccountId == resolvedAccountId && l.Deleted != true);
+
+        // Distribución por tier
+        var tierRaw = await leadsQ
+            .Where(l => l.TierId != null)
+            .GroupBy(l => new { l.TierId, Name = l.Tier!.Name, l.Tier.Color })
+            .Select(g => new { g.Key.TierId, g.Key.Name, g.Key.Color, Count = g.Count() })
+            .ToListAsync();
+        var totalTiered = tierRaw.Sum(t => t.Count);
+        var leadsByTier = tierRaw.Select(t => new
+        {
+            tierId = t.TierId, name = t.Name, color = t.Color, count = t.Count,
+            pct = totalTiered > 0 ? Math.Round((double)t.Count / totalTiered * 100, 1) : 0,
+        });
+
+        // Score promedio (actual vs anterior)
+        var avgCur  = await leadsQ.Where(l => l.Score != null && l.CreatedOn >= curFrom).AverageAsync(l => (decimal?)l.Score) ?? 0m;
+        var avgPrev = await leadsQ.Where(l => l.Score != null && l.CreatedOn >= prevFrom && l.CreatedOn < curFrom).AverageAsync(l => (decimal?)l.Score) ?? 0m;
+
+        // Leads calificados (con tier) actual vs anterior
+        var qualCur  = await leadsQ.CountAsync(l => l.TierId != null && l.CreatedOn >= curFrom);
+        var qualPrev = await leadsQ.CountAsync(l => l.TierId != null && l.CreatedOn >= prevFrom && l.CreatedOn < curFrom);
+
+        // Conversión por tier: deals ganados cuyo lead de origen tiene ese tier
+        var conversionByTier = await _db.Deals.AsNoTracking()
+            .Where(d => d.AccountId == resolvedAccountId && d.OriginatingLeadId != null)
+            .Join(_db.Leads.Where(l => l.TierId != null), d => d.OriginatingLeadId, l => l.LeadId,
+                  (d, l) => new { d.Status, l.TierId, TierName = l.Tier!.Name })
+            .GroupBy(x => new { x.TierId, x.TierName })
+            .Select(g => new
+            {
+                tierId  = g.Key.TierId, name = g.Key.TierName,
+                leads   = g.Count(),
+                won     = g.Count(x => x.Status == "Ganado"),
+                winRate = g.Count() > 0 ? Math.Round((double)g.Count(x => x.Status == "Ganado") / g.Count() * 100, 1) : 0,
+            })
+            .ToListAsync();
+
+        return Ok(new
+        {
+            leadsByTier,
+            avgScore       = new { current = Math.Round(avgCur, 1), previous = Math.Round(avgPrev, 1) },
+            qualifiedLeads = new { current = qualCur, previous = qualPrev },
+            conversionByTier,
+        });
+    }
+
     // ── GET /api/dashboard/meta-kpis?accountId=&days=30 ──────────────────────
     [HttpGet("meta-kpis")]
     [SwaggerOperation(Summary = "KPIs de Meta Lead Ads — leads por campaña, anuncio, formulario y salud de webhooks")]
@@ -495,4 +623,9 @@ public class DashboardController : ControllerBase
             campaignBreakdown,
         });
     }
+}
+
+public class DashboardLayoutDto
+{
+    public string LayoutJson { get; set; } = "[]";
 }

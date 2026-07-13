@@ -2827,3 +2827,93 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'MetaPageToken')
     ALTER TABLE dbo.AutomationRules ADD MetaPageToken NVARCHAR(1024) NULL;
 GO
+
+-- ####################################################################
+-- ### SCORING IA - FASE 1: persistir score en Lead + trazabilidad
+-- ####################################################################
+PRINT '--- Scoring Fase 1: columnas de score en Leads y LeadScoringAnswers... ---';
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Leads') AND name = 'Score')
+    ALTER TABLE dbo.Leads ADD Score DECIMAL(6,2) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Leads') AND name = 'TierId')
+    ALTER TABLE dbo.Leads ADD TierId INT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Leads') AND name = 'ScoreReasoning')
+    ALTER TABLE dbo.Leads ADD ScoreReasoning NVARCHAR(MAX) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Leads') AND name = 'ScoredAt')
+    ALTER TABLE dbo.Leads ADD ScoredAt DATETIME2 NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Leads') AND name = 'ScoreSource')
+    ALTER TABLE dbo.Leads ADD ScoreSource NVARCHAR(20) NULL;  -- 'Manual' | 'AI' | 'Hybrid'
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_Leads_LeadTiers')
+    ALTER TABLE dbo.Leads ADD CONSTRAINT FK_Leads_LeadTiers FOREIGN KEY (TierId) REFERENCES dbo.LeadTiers(TierId);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LeadScoringAnswers') AND name = 'Source')
+    ALTER TABLE dbo.LeadScoringAnswers ADD Source NVARCHAR(20) NULL;   -- 'Manual' | 'AI'
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LeadScoringAnswers') AND name = 'Confidence')
+    ALTER TABLE dbo.LeadScoringAnswers ADD Confidence DECIMAL(4,3) NULL; -- 0..1 (solo IA)
+GO
+
+-- ####################################################################
+-- ### TIMELINE (C1): hilo cronologico por lead/deal
+-- ####################################################################
+PRINT '--- Timeline: tabla TimelineEvents... ---';
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'TimelineEvents')
+CREATE TABLE dbo.TimelineEvents (
+    TimelineEventId BIGINT IDENTITY(1,1) PRIMARY KEY,
+    AccountId       INT NOT NULL,
+    EntityType      NVARCHAR(20) NOT NULL,   -- 'Lead' | 'Deal'
+    EntityId        BIGINT NOT NULL,
+    Type            NVARCHAR(30) NOT NULL,   -- 'lead_created' | 'stage_change' | 'score_change' | 'note' | ...
+    Title           NVARCHAR(200) NOT NULL,
+    Detail          NVARCHAR(MAX) NULL,
+    MetaJson        NVARCHAR(MAX) NULL,
+    CreatedByUserId NVARCHAR(450) NULL,
+    CreatedOn       DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    Deleted         BIT NOT NULL DEFAULT 0
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_TimelineEvents_Entity')
+    CREATE INDEX IX_TimelineEvents_Entity ON dbo.TimelineEvents(AccountId, EntityType, EntityId, CreatedOn DESC);
+GO
+
+-- Scoring: senal directa del lead en condiciones de regla (reglas automaticas generadas por IA)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ScoringRuleConditions') AND name = 'SignalField')
+    ALTER TABLE dbo.ScoringRuleConditions ADD SignalField NVARCHAR(50) NULL;
+GO
+
+-- ── Reportes guardados (constructor de gráficas) ──
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'SavedReports')
+CREATE TABLE dbo.SavedReports (
+    Id         INT IDENTITY(1,1) PRIMARY KEY,
+    AccountId  INT NOT NULL,
+    UserId     NVARCHAR(450) NULL,
+    Name       NVARCHAR(200) NOT NULL,
+    LayoutJson NVARCHAR(MAX) NOT NULL,
+    CreatedOn  DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+    Deleted    BIT NOT NULL DEFAULT 0
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SavedReports_Account')
+    CREATE INDEX IX_SavedReports_Account ON dbo.SavedReports(AccountId, Deleted);
+GO
+
+-- ── Layout del dashboard por usuario/cuenta (D3) ──
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'DashboardLayouts')
+CREATE TABLE dbo.DashboardLayouts (
+    Id         INT IDENTITY(1,1) PRIMARY KEY,
+    AccountId  INT NOT NULL,
+    UserId     NVARCHAR(450) NULL,
+    LayoutJson NVARCHAR(MAX) NOT NULL,
+    ModifiedOn DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DashboardLayouts_UserAccount')
+    CREATE INDEX IX_DashboardLayouts_UserAccount ON dbo.DashboardLayouts(UserId, AccountId);
+GO

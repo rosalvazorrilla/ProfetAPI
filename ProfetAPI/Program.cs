@@ -85,6 +85,33 @@ builder.Services.AddScoped<ProfetAPI.Services.MetaAdsService>();
 builder.Services.AddScoped<ProfetAPI.Services.AutomationExecutorService>();
 builder.Services.AddScoped<ProfetAPI.Services.PlaybookService>();
 
+// Cifrado de secretos por cuenta (tokens de Meta, etc.) — Data Protection API
+builder.Services.AddSingleton<ProfetAPI.Services.SecretProtector>();
+
+// Cliente de IA (Claude) — infraestructura compartida por scoring, dashboard, inbox, llamadas…
+builder.Services.AddScoped<ProfetAPI.Services.IAiClient, ProfetAPI.Services.AnthropicAiClient>();
+
+// Motor determinista de scoring (score + tiers)
+builder.Services.AddScoped<ProfetAPI.Services.ScoringCalculator>();
+
+// IA de scoring (generador desde prompt + scoring runtime)
+builder.Services.AddScoped<ProfetAPI.Services.IScoringAiService, ProfetAPI.Services.ScoringAiService>();
+
+// Analítica: catálogo de métricas + motor de consultas seguro + IA analítica
+builder.Services.AddScoped<ProfetAPI.Services.Metrics.MetricsCatalog>();
+builder.Services.AddScoped<ProfetAPI.Services.Metrics.MetricsQueryService>();
+builder.Services.AddScoped<ProfetAPI.Services.Metrics.MetricsAiService>();
+
+// Línea de tiempo (timeline) por lead/deal
+builder.Services.AddScoped<ProfetAPI.Services.ITimelineLogger, ProfetAPI.Services.TimelineLogger>();
+
+// Notificaciones in-app
+builder.Services.AddScoped<ProfetAPI.Services.INotificationService, ProfetAPI.Services.NotificationService>();
+
+// Próxima mejor acción (IA, con caché en memoria)
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<ProfetAPI.Services.INextActionService, ProfetAPI.Services.NextActionService>();
+
 // --- 5b. Servicios de Controladores, SignalR y Swagger ---
 builder.Services.AddSignalR();
 builder.Services.AddControllers();

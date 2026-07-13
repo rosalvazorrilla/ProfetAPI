@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using ProfetAPI.Data;
 using ProfetAPI.Models;
 using Swashbuckle.AspNetCore.Annotations;
@@ -16,15 +17,33 @@ public class LeadsController : ControllerBase
     private readonly ApplicationDbContext _context;
     private readonly ProfetAPI.Services.AutomationExecutorService _automations;
     private readonly ProfetAPI.Services.PlaybookService _playbooks;
+    private readonly ProfetAPI.Services.ScoringCalculator _scoring;
+    private readonly ProfetAPI.Services.ITimelineLogger _timeline;
+    private readonly ProfetAPI.Services.IScoringAiService _scoringAi;
+    private readonly ProfetAPI.Services.INotificationService _notify;
+    private readonly ProfetAPI.Services.INextActionService _nextAction;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public LeadsController(
         ApplicationDbContext context,
         ProfetAPI.Services.AutomationExecutorService automations,
-        ProfetAPI.Services.PlaybookService playbooks)
+        ProfetAPI.Services.PlaybookService playbooks,
+        ProfetAPI.Services.ScoringCalculator scoring,
+        ProfetAPI.Services.ITimelineLogger timeline,
+        ProfetAPI.Services.IScoringAiService scoringAi,
+        ProfetAPI.Services.INotificationService notify,
+        ProfetAPI.Services.INextActionService nextAction,
+        IServiceScopeFactory scopeFactory)
     {
-        _context     = context;
-        _automations = automations;
-        _playbooks   = playbooks;
+        _context      = context;
+        _automations  = automations;
+        _playbooks    = playbooks;
+        _scoring      = scoring;
+        _timeline     = timeline;
+        _scoringAi    = scoringAi;
+        _notify       = notify;
+        _nextAction   = nextAction;
+        _scopeFactory = scopeFactory;
     }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -596,8 +615,29 @@ public class LeadsController : ControllerBase
         _context.Leads.Add(lead);
         await _context.SaveChangesAsync();
 
+        // Registrar en la línea de tiempo
+        await _timeline.LogAsync(resolvedAccountId, "Lead", lead.LeadId, "lead_created",
+            "Prospecto creado", detail: lead.ProspectSource, userId: CurrentUserId);
+
+        // Notificar al dueño del prospecto (si lo hay y no es quien lo creó)
+        if (!string.IsNullOrEmpty(lead.OwnerUserId) && lead.OwnerUserId != CurrentUserId)
+            await _notify.NotifyAsync(lead.OwnerUserId, $"Nuevo prospecto asignado: {lead.Name}",
+                url: $"/prospectos?id={lead.LeadId}", entityType: "Lead", entityId: lead.LeadId);
+
         // Aplicar el playbook predeterminado de la cuenta: genera las tareas ordenadas para el vendedor
         await _playbooks.ApplyDefaultAsync(resolvedAccountId, lead.LeadId, lead.OwnerUserId);
+
+        // F4-T3: auto-calificación IA preliminar (background, scope propio; no bloquea la ingesta)
+        if (_scoringAi.IsConfigured)
+        {
+            var newLeadId = lead.LeadId;
+            _ = Task.Run(async () =>
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var ai = scope.ServiceProvider.GetRequiredService<ProfetAPI.Services.IScoringAiService>();
+                try { await ai.ScoreAndPersistAsync(newLeadId); } catch { /* no romper la ingesta */ }
+            });
+        }
 
         // Disparar automatizaciones "LeadCreated" para esta cuenta
         _ = Task.Run(() => _automations.FireAsync(resolvedAccountId, "LeadCreated", new Dictionary<string, string>
@@ -732,11 +772,27 @@ public class LeadsController : ControllerBase
         var maxPoints = questions.Sum(q =>
             q.options.Count > 0 ? q.options.Max(o => o.Points) : 0);
 
+        // Tier persistido del lead (Fase 1)
+        var leadTier = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id)
+            .Select(l => new
+            {
+                l.Score, l.TierId, l.ScoreSource,
+                tierName  = l.Tier != null ? l.Tier.Name  : null,
+                tierColor = l.Tier != null ? l.Tier.Color : null,
+            })
+            .FirstOrDefaultAsync();
+
         return Ok(new
         {
             hasScoring  = true,
             scoringModelId = model.ScoringModelId,
             modelName   = model.Name,
+            score       = leadTier?.Score,
+            tierId      = leadTier?.TierId,
+            tierName    = leadTier?.tierName,
+            tierColor   = leadTier?.tierColor,
+            scoreSource = leadTier?.ScoreSource,
             questions   = questions.Select(q =>
             {
                 answersByQuestion.TryGetValue(q.QuestionId, out var ans);
@@ -793,7 +849,7 @@ public class LeadsController : ControllerBase
             .ToListAsync();
         _context.LeadScoringAnswers.RemoveRange(existing);
 
-        // Add new answers
+        // Add new answers (marcadas como Manual — la corrección humana gana)
         var newAnswers = answers.Select(a =>
         {
             var pts = a.AnswerOptionId.HasValue && optionPoints.TryGetValue(a.AnswerOptionId.Value, out var p) ? p : 0m;
@@ -805,17 +861,173 @@ public class LeadsController : ControllerBase
                 TextValue      = a.TextValue,
                 NumericValue   = a.NumericValue,
                 PointsAwarded  = pts,
+                Source         = "Manual",
             };
         }).ToList();
 
         _context.LeadScoringAnswers.AddRange(newAnswers);
         await _context.SaveChangesAsync();
 
-        var totalPoints = await _context.LeadScoringAnswers
-            .Where(a => a.LeadId == id)
-            .SumAsync(a => (decimal?)a.PointsAwarded) ?? 0m;
+        // Recalcular score total (respuestas + reglas automáticas), resolver tier y persistir en el Lead
+        var result = await _scoring.RecomputeAndPersistAsync(id);
 
-        return Ok(new { leadId = id, totalPoints });
+        // Registrar el cambio de score en la línea de tiempo
+        if (result.HasModel && lead.AccountId is int scAcc)
+            await _timeline.LogAsync(scAcc, "Lead", id, "score_change",
+                result.TierName != null ? $"Calificación: {result.TierName} ({result.Total} pts)"
+                                        : $"Calificación actualizada ({result.Total} pts)",
+                userId: CurrentUserId);
+
+        return Ok(new
+        {
+            leadId      = id,
+            totalPoints = result.HasModel ? result.Total : newAnswers.Sum(a => a.PointsAwarded),
+            tierId      = result.TierId,
+            tierName    = result.TierName,
+            scoreSource = result.Source,
+        });
+    }
+
+    // POST /api/leads/{id}/scoring/ai  — F3: calificar con IA (Claude elige respuestas)
+    [HttpPost("{id:long}/scoring/ai")]
+    [SwaggerOperation(Summary = "Calificar el prospecto con IA")]
+    [SwaggerResponse(200, "Lead calificado por IA")]
+    public async Task<IActionResult> ScoreWithAi(long id)
+    {
+        var lead = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Select(l => new { l.AccountId, l.OwnerUserId, l.Name }).FirstOrDefaultAsync();
+        if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+        if (!_scoringAi.IsConfigured)
+            return StatusCode(503, new { message = "La IA no está configurada (falta Anthropic:ApiKey)." });
+
+        var r = await _scoringAi.ScoreAndPersistAsync(id);
+        if (!r.HasModel) return BadRequest(new { message = "La cuenta no tiene modelo de calificación." });
+
+        if (lead.AccountId is int acc)
+            await _timeline.LogAsync(acc, "Lead", id, "score_change",
+                r.TierName != null ? $"IA: {r.TierName} ({r.Score} pts)" : $"Calificado por IA ({r.Score} pts)",
+                detail: r.Reasoning, userId: CurrentUserId);
+
+        // Notificar al dueño el resultado de la calificación
+        if (r.TierName != null && !string.IsNullOrEmpty(lead.OwnerUserId))
+            await _notify.NotifyAsync(lead.OwnerUserId, $"Prospecto calificado {r.TierName}: {lead.Name}",
+                url: $"/prospectos?id={id}", entityType: "Lead", entityId: id);
+
+        return Ok(new
+        {
+            leadId = id, score = r.Score, tierId = r.TierId, tierName = r.TierName,
+            reasoning = r.Reasoning, answered = r.Answered, pending = r.Pending, scoreSource = "AI",
+        });
+    }
+
+    // GET /api/leads/{id}/next-action  — P3: próxima mejor acción (IA)
+    [HttpGet("{id:long}/next-action")]
+    [SwaggerOperation(Summary = "Próxima mejor acción sugerida por IA para el prospecto")]
+    public async Task<IActionResult> GetNextAction(long id)
+    {
+        var lead = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Select(l => new { l.AccountId }).FirstOrDefaultAsync();
+        if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        var r = await _nextAction.GetForLeadAsync(id);
+        return Ok(new { available = r.Available, summary = r.Summary, action = r.Action, priority = r.Priority, reason = r.Reason });
+    }
+
+    // GET /api/leads/{id}/scoring/pending  — F4: preguntas sin responder (guion de enriquecimiento)
+    [HttpGet("{id:long}/scoring/pending")]
+    [SwaggerOperation(Summary = "Preguntas de calificación pendientes del prospecto")]
+    public async Task<IActionResult> GetPendingScoring(long id)
+    {
+        var lead = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id).Select(l => new { l.AccountId }).FirstOrDefaultAsync();
+        if (lead?.AccountId == null) return NotFound();
+
+        var modelId = await _context.ScoringModels.AsNoTracking()
+            .Where(m => m.AccountId == lead.AccountId.Value)
+            .Select(m => (int?)m.ScoringModelId).FirstOrDefaultAsync();
+        if (modelId == null) return Ok(Array.Empty<object>());
+
+        var answeredQ = await _context.LeadScoringAnswers.AsNoTracking()
+            .Where(a => a.LeadId == id && a.AnswerOptionId != null)
+            .Select(a => a.QuestionId).Distinct().ToListAsync();
+
+        var pending = await _context.ScoringQuestions.AsNoTracking()
+            .Where(q => q.ScoringModelId == modelId && !answeredQ.Contains(q.QuestionId))
+            .OrderBy(q => q.OrderPosition)
+            .Select(q => new
+            {
+                q.QuestionId, q.QuestionText, q.QuestionType, q.IsRequired,
+                options = _context.ScoringAnswerOptions.Where(o => o.QuestionId == q.QuestionId)
+                    .OrderBy(o => o.OrderPosition)
+                    .Select(o => new { o.AnswerOptionId, o.AnswerText, o.Points }).ToList(),
+            })
+            .ToListAsync();
+
+        return Ok(pending);
+    }
+
+    // GET /api/leads/{id}/timeline  — hilo cronológico del lead
+    [HttpGet("{id:long}/timeline")]
+    [SwaggerOperation(Summary = "Línea de tiempo del prospecto")]
+    [SwaggerResponse(200, "Eventos del lead")]
+    public async Task<IActionResult> GetTimeline(long id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        var lead = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id).Select(l => new { l.AccountId }).FirstOrDefaultAsync();
+        if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        var events = await _context.TimelineEvents.AsNoTracking()
+            .Where(e => e.EntityType == "Lead" && e.EntityId == id && !e.Deleted)
+            .OrderByDescending(e => e.CreatedOn)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(e => new { e.TimelineEventId, e.Type, e.Title, e.Detail, e.CreatedByUserId, e.CreatedOn })
+            .ToListAsync();
+        return Ok(events);
+    }
+
+    // POST /api/leads/{id}/timeline/note  — agregar nota al hilo
+    [HttpPost("{id:long}/timeline/note")]
+    [SwaggerOperation(Summary = "Agregar nota a la línea de tiempo del prospecto")]
+    public async Task<IActionResult> AddTimelineNote(long id, [FromBody] TimelineNoteDto dto)
+    {
+        var lead = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id).Select(l => new { l.AccountId }).FirstOrDefaultAsync();
+        if (lead?.AccountId == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+        if (string.IsNullOrWhiteSpace(dto.Text)) return BadRequest(new { message = "La nota no puede estar vacía." });
+
+        await _timeline.LogAsync(lead.AccountId.Value, "Lead", id, "note", "Nota",
+            detail: dto.Text.Trim(), userId: CurrentUserId);
+        return Ok(new { added = true });
     }
 
     // POST /api/leads/{id}/convert-to-deal  — convertir lead en oportunidad
@@ -1070,6 +1282,11 @@ public class ScoringAnswerDto
     public int? AnswerOptionId    { get; set; }
     public string? TextValue      { get; set; }
     public decimal? NumericValue  { get; set; }
+}
+
+public class TimelineNoteDto
+{
+    public string Text { get; set; } = "";
 }
 
 public class ConvertToDealDto

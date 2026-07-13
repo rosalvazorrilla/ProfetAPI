@@ -15,11 +15,16 @@ public class DealsController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly ProfetAPI.Services.AutomationExecutorService _automations;
+    private readonly ProfetAPI.Services.ITimelineLogger _timeline;
 
-    public DealsController(ApplicationDbContext context, ProfetAPI.Services.AutomationExecutorService automations)
+    public DealsController(
+        ApplicationDbContext context,
+        ProfetAPI.Services.AutomationExecutorService automations,
+        ProfetAPI.Services.ITimelineLogger timeline)
     {
         _context     = context;
         _automations = automations;
+        _timeline    = timeline;
     }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -443,6 +448,12 @@ public class DealsController : ControllerBase
         };
 
         var accId = deal.AccountId;
+
+        // Registrar el cambio de etapa en la línea de tiempo del deal
+        await _timeline.LogAsync(accId, "Deal", deal.DealId, "stage_change",
+            string.IsNullOrWhiteSpace(stageName) ? "Cambio de etapa" : $"Movida a: {stageName}",
+            userId: CurrentUserId);
+
         // StageChanged siempre; DealWon/DealLost si la etapa destino lo indica por su nombre
         _ = Task.Run(async () =>
         {
@@ -453,6 +464,53 @@ public class DealsController : ControllerBase
         });
 
         return Ok(new { dealId = deal.DealId, stageId = deal.StageId });
+    }
+
+    // GET /api/deals/{id}/timeline  — hilo cronológico del deal
+    [HttpGet("{id:int}/timeline")]
+    [SwaggerOperation(Summary = "Línea de tiempo de la oportunidad")]
+    public async Task<IActionResult> GetTimeline(int id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        var deal = await _context.Deals.AsNoTracking()
+            .Where(d => d.DealId == id).Select(d => new { d.AccountId }).FirstOrDefaultAsync();
+        if (deal == null) return NotFound(new { message = "Oportunidad no encontrada." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == deal.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        var events = await _context.TimelineEvents.AsNoTracking()
+            .Where(e => e.EntityType == "Deal" && e.EntityId == id && !e.Deleted)
+            .OrderByDescending(e => e.CreatedOn)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(e => new { e.TimelineEventId, e.Type, e.Title, e.Detail, e.CreatedByUserId, e.CreatedOn })
+            .ToListAsync();
+        return Ok(events);
+    }
+
+    // POST /api/deals/{id}/timeline/note
+    [HttpPost("{id:int}/timeline/note")]
+    [SwaggerOperation(Summary = "Agregar nota a la línea de tiempo de la oportunidad")]
+    public async Task<IActionResult> AddTimelineNote(int id, [FromBody] DealNoteDto dto)
+    {
+        var deal = await _context.Deals.AsNoTracking()
+            .Where(d => d.DealId == id).Select(d => new { d.AccountId }).FirstOrDefaultAsync();
+        if (deal == null) return NotFound(new { message = "Oportunidad no encontrada." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == deal.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+        if (string.IsNullOrWhiteSpace(dto.Text)) return BadRequest(new { message = "La nota no puede estar vacía." });
+
+        await _timeline.LogAsync(deal.AccountId, "Deal", id, "note", "Nota",
+            detail: dto.Text.Trim(), userId: CurrentUserId);
+        return Ok(new { added = true });
     }
 
     /// <summary>Clasifica una etapa como "won"/"lost"/"" según palabras clave en su nombre.</summary>
@@ -580,4 +638,9 @@ public class DealsController : ControllerBase
 public class MoveStageDto
 {
     public int? StageId { get; set; }
+}
+
+public class DealNoteDto
+{
+    public string Text { get; set; } = "";
 }
