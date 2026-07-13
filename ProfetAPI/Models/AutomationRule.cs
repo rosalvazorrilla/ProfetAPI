@@ -39,11 +39,15 @@ public class AutomationRule
     public string? VerifyToken { get; set; }
 
     /// <summary>
-    /// Page Access Token de Meta. Necesario para que, al recibir un leadgen_id,
-    /// el receptor consulte la Graph API y traiga los campos reales del lead (name, email, phone…).
+    /// Page Access Token de Meta (opcional, cifrado). Si está vacío, el receptor resuelve el token
+    /// desde la conexión de Meta existente de la cuenta (AccountWebhooks) usando MetaPageId.
     /// </summary>
     [MaxLength(1024)]
     public string? MetaPageToken { get; set; }
+
+    /// <summary>Página de Meta seleccionada (su token se toma de la conexión existente de la cuenta).</summary>
+    [MaxLength(80)]
+    public string? MetaPageId { get; set; }
 
     /// <summary>
     /// JSON: [{ "field": "prospectSource", "op": "eq", "value": "Meta Lead Ads" }, ...]

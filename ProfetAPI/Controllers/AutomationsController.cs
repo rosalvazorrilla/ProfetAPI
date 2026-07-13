@@ -60,7 +60,7 @@ public class AutomationsController : ControllerBase
                 webhookUrl = r.WebhookKey != null
                     ? $"/api/receive/auto/{r.WebhookKey}"
                     : (string?)null,
-                r.VerifyToken,
+                r.VerifyToken, r.MetaPageId,
                 hasMetaToken = r.MetaPageToken != null,
                 r.ConditionsJson, r.CreatedAt,
                 steps = r.Steps.Select(s => new { s.StepId, s.StepOrder, s.StepType, s.ConfigJson, s.IsActive }),
@@ -115,6 +115,7 @@ public class AutomationsController : ControllerBase
                 ? Guid.NewGuid().ToString("N")[..16]
                 : null,
             MetaPageToken   = string.IsNullOrWhiteSpace(req.MetaPageToken) ? null : _secrets.Protect(req.MetaPageToken.Trim()),
+            MetaPageId      = string.IsNullOrWhiteSpace(req.MetaPageId) ? null : req.MetaPageId.Trim(),
             CreatedAt = DateTime.UtcNow,
         };
         _db.AutomationRules.Add(rule);
@@ -153,6 +154,7 @@ public class AutomationsController : ControllerBase
             // Solo sobrescribir el token de Meta si el front envía uno nuevo (no reenvía el existente)
             if (!string.IsNullOrWhiteSpace(req.MetaPageToken))
                 rule.MetaPageToken = _secrets.Protect(req.MetaPageToken.Trim());
+            rule.MetaPageId = string.IsNullOrWhiteSpace(req.MetaPageId) ? null : req.MetaPageId.Trim();
         }
         else
         {
@@ -328,9 +330,11 @@ public class AutomationWebhookReceiverController : ControllerBase
         }
         catch { body = ""; }
 
-        var ruleId    = rule.RuleId;
-        var metaToken = _secrets.Unprotect(rule.MetaPageToken);   // descifrar para usarlo
-        var leadgenIds = ExtractMetaLeadgenIds(body);
+        var ruleId       = rule.RuleId;
+        var metaTokenEnc = rule.MetaPageToken;   // cifrado (opcional, override manual)
+        var metaPageId   = rule.MetaPageId;
+        var ruleAccount  = rule.AccountId;
+        var leadgenIds   = ExtractMetaLeadgenIds(body);
 
         // Fire and forget con SCOPE PROPIO (evita usar el DbContext del request ya liberado).
         // Responder 200 rápido es requisito de Meta (<5s).
@@ -344,6 +348,14 @@ public class AutomationWebhookReceiverController : ControllerBase
                 .Include(r => r.Steps.Where(s => s.IsActive).OrderBy(s => s.StepOrder))
                 .FirstOrDefaultAsync(r => r.RuleId == ruleId);
             if (freshRule == null) return;
+
+            // Resolver el token de Meta: 1) el pegado manualmente (cifrado), o 2) el de la conexión
+            //    de Meta existente de la cuenta (AccountWebhooks) según la página elegida.
+            var metaToken = _secrets.Unprotect(metaTokenEnc);
+            if (string.IsNullOrWhiteSpace(metaToken) && !string.IsNullOrWhiteSpace(metaPageId))
+                metaToken = await db.AccountWebhooks.AsNoTracking()
+                    .Where(w => w.AccountId == ruleAccount && w.MetaPageId == metaPageId && w.MetaPageAccessToken != null)
+                    .Select(w => w.MetaPageAccessToken).FirstOrDefaultAsync();
 
             if (leadgenIds.Count > 0 && !string.IsNullOrWhiteSpace(metaToken))
             {
@@ -473,6 +485,7 @@ public class SaveAutomationRequest
     public string TriggerType     { get; set; } = "WebhookIncoming";
     public string? TriggerPlatform{ get; set; }
     public string? MetaPageToken  { get; set; }
+    public string? MetaPageId     { get; set; }
     public string? ConditionsJson { get; set; }
     public List<StepRequest>? Steps { get; set; }
 }

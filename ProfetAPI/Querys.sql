@@ -2917,3 +2917,8 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DashboardLayouts_UserAccount')
     CREATE INDEX IX_DashboardLayouts_UserAccount ON dbo.DashboardLayouts(UserId, AccountId);
 GO
+
+-- AutomationRules: pagina de Meta seleccionada (token se resuelve de la conexion existente)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'MetaPageId')
+    ALTER TABLE dbo.AutomationRules ADD MetaPageId NVARCHAR(80) NULL;
+GO
