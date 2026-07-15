@@ -2933,3 +2933,14 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AutomationRules') AND name = 'MetaFormName')
     ALTER TABLE dbo.AutomationRules ADD MetaFormName NVARCHAR(200) NULL;
 GO
+
+-- Índices críticos: Leads y Deals no tenían índice en AccountId (114k/113k filas,
+-- escaneo completo en cada consulta filtrada por cuenta). Causaba timeouts en Prospectos/Oportunidades.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Leads_AccountId_CreatedOn' AND object_id = OBJECT_ID('dbo.Leads'))
+CREATE INDEX IX_Leads_AccountId_CreatedOn ON dbo.Leads(AccountId, Deleted, CreatedOn DESC)
+INCLUDE (Name, Email, Phone, Company, ContactId, OwnerUserId, ProspectSource, Status, OriginType, AdName, TierId, Score);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Deals_AccountId_Stage' AND object_id = OBJECT_ID('dbo.Deals'))
+CREATE INDEX IX_Deals_AccountId_Stage ON dbo.Deals(AccountId, StageId, CreatedOn DESC)
+INCLUDE (Status, DealName, QuotedAmount, FinalAmount, CloseDate, CompanyId, PrimaryContactId);
+GO

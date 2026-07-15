@@ -172,6 +172,22 @@ builder.Services.AddSwaggerGen(c =>
 // --- Construir la App ---
 var app = builder.Build();
 
+// --- Warm-up: abre la conexión a Azure SQL y compila el plan de las consultas más
+// pesadas (Leads) ANTES de que llegue el primer usuario, para evitar que la primera
+// petición real "cuelgue" mientras EF Core hace ese trabajo por primera vez.
+_ = Task.Run(async () =>
+{
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        await db.Database.CanConnectAsync();
+        _ = await db.Leads.AsNoTracking().Where(l => l.AccountId == -1).Select(l => l.LeadId).FirstOrDefaultAsync();
+        _ = await db.Deals.AsNoTracking().Where(d => d.AccountId == -1).Select(d => d.DealId).FirstOrDefaultAsync();
+    }
+    catch { /* el warm-up es best-effort; si falla, la primera petición real solo será más lenta */ }
+});
+
 // --- 6. Pipeline HTTP ---
 
 // Mover Swagger FUERA del if(Development) para que se vea en Azure
