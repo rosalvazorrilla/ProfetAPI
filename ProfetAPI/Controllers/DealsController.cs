@@ -7,6 +7,11 @@ using Swashbuckle.AspNetCore.Annotations;
 
 namespace ProfetAPI.Controllers;
 
+/// <summary>Proyección liviana de un deal para una columna del kanban (Top-N por etapa).</summary>
+public record StageDealRow(
+    int DealId, string DealName, decimal? QuotedAmount, string Status, DateTime CreatedOn,
+    DateTime? CloseDate, int? StageId, string? Company, string? Contact, string OwnerRaw);
+
 [Route("api/[controller]")]
 [ApiController]
 [Authorize]
@@ -116,42 +121,36 @@ public class DealsController : ControllerBase
 
         var statsMap = stageStats.ToDictionary(x => x.stageId ?? -1);
 
-        // ── 2. Todos los deals del kanban en UNA sola query ──────────────────
+        // ── 2. Solo los primeros `dealsPerStage` deals de CADA etapa (Top-N en SQL) ──
+        // Antes se traían TODOS los deals de la cuenta y se recortaban en memoria;
+        // con cuentas grandes eso cargaba miles de filas en cada apertura del kanban.
         static string Initials(string name) =>
             string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries)
                               .Take(2).Select(p => char.ToUpper(p[0]).ToString()));
 
         var stageIds = stages.Select(s => s.StageId).ToList();
+        var dealsByStage = new Dictionary<int, List<StageDealRow>>();
 
-        var allDeals = await baseQ
-            .Where(d => d.StageId != null && stageIds.Contains(d.StageId.Value))
-            .OrderByDescending(d => d.CreatedOn)
-            .Select(d => new
-            {
-                dealId       = d.DealId,
-                dealName     = d.DealName,
-                quotedAmount = d.QuotedAmount,
-                status       = d.Status,
-                createdOn    = d.CreatedOn,
-                closeDate    = d.CloseDate,
-                stageId      = d.StageId,
-                company      = d.Company != null ? d.Company.Name : null,
-                contact      = d.PrimaryContact != null
-                    ? (d.PrimaryContact.FirstName + " " + d.PrimaryContact.LastName).Trim()
-                    : null,
-                ownerRaw = d.DealUsers
-                    .Where(du => du.RoleInDeal == "Owner" || du.RoleInDeal == null)
-                    .Select(du => du.User.UserProfile != null
-                        ? (du.User.UserProfile.FirstName + " " + du.User.UserProfile.LastName).Trim()
-                        : du.User.UserName ?? "")
-                    .FirstOrDefault() ?? "",
-            })
-            .ToListAsync();
-
-        // Agrupar en memoria — evita N+1 queries al backend
-        var dealsByStage = allDeals
-            .GroupBy(d => d.stageId ?? -1)
-            .ToDictionary(g => g.Key, g => g.Take(dealsPerStage).ToList());
+        // Una query por etapa (acotada con Take): el DbContext no soporta paralelismo,
+        // así que se recorren secuencialmente — cada una es un Top-N indexado, no un escaneo completo.
+        foreach (var stageId in stageIds)
+        {
+            dealsByStage[stageId] = await baseQ
+                .Where(d => d.StageId == stageId)
+                .OrderByDescending(d => d.CreatedOn)
+                .Take(dealsPerStage)
+                .Select(d => new StageDealRow(
+                    d.DealId, d.DealName, d.QuotedAmount, d.Status, d.CreatedOn, d.CloseDate, d.StageId,
+                    d.Company != null ? d.Company.Name : null,
+                    d.PrimaryContact != null ? (d.PrimaryContact.FirstName + " " + d.PrimaryContact.LastName).Trim() : null,
+                    d.DealUsers
+                        .Where(du => du.RoleInDeal == "Owner" || du.RoleInDeal == null)
+                        .Select(du => du.User.UserProfile != null
+                            ? (du.User.UserProfile.FirstName + " " + du.User.UserProfile.LastName).Trim()
+                            : du.User.UserName ?? "")
+                        .FirstOrDefault() ?? ""))
+                .ToListAsync();
+        }
 
         var kanbanStages = stages.Select(s =>
         {
@@ -170,17 +169,17 @@ public class DealsController : ControllerBase
                 totalAmount = stat?.totalAmount ?? 0m,
                 deals = pageDeals.Select(d => new
                 {
-                    d.dealId,
-                    d.dealName,
-                    d.company,
-                    d.contact,
-                    d.quotedAmount,
-                    d.status,
-                    d.createdOn,
-                    d.closeDate,
-                    d.stageId,
-                    ownerName     = d.ownerRaw,
-                    ownerInitials = d.ownerRaw.Length > 0 ? Initials(d.ownerRaw) : "?",
+                    dealId       = d.DealId,
+                    dealName     = d.DealName,
+                    company      = d.Company,
+                    contact      = d.Contact,
+                    quotedAmount = d.QuotedAmount,
+                    status       = d.Status,
+                    createdOn    = d.CreatedOn,
+                    closeDate    = d.CloseDate,
+                    stageId      = d.StageId,
+                    ownerName     = d.OwnerRaw,
+                    ownerInitials = d.OwnerRaw.Length > 0 ? Initials(d.OwnerRaw) : "?",
                     tags          = Array.Empty<object>(),
                 }).ToList(),
             };
