@@ -53,6 +53,15 @@ public class Account
     [StringLength(50)]
     public string? MetaAdAccountId { get; set; }
 
+    // ── Google Ads (D4) ──────────────────────────────────────────────────────────
+    /// <summary>ID de 10 dígitos de la cuenta de Google Ads vinculada (sin guiones).</summary>
+    [StringLength(20)]
+    public string? GoogleAdsCustomerId { get; set; }
+    [StringLength(200)]
+    public string? GoogleAdsAccountName { get; set; }
+    /// <summary>Refresh token de OAuth cifrado con SecretProtector.</summary>
+    public string? GoogleAdsRefreshTokenEncrypted { get; set; }
+
     // Propiedades de navegación
     public virtual Customer Customer { get; set; } = null!;
     public virtual ICollection<AccountInternalUser> InternalUsers { get; set; } = new List<AccountInternalUser>();

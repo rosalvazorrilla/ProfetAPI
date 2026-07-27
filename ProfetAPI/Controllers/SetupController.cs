@@ -3,7 +3,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProfetAPI.Data;
 using ProfetAPI.Dtos;
+using ProfetAPI.Dtos.Scoring;
 using ProfetAPI.Models;
+using ProfetAPI.Services;
 using Swashbuckle.AspNetCore.Annotations;
 
 namespace ProfetAPI.Controllers
@@ -20,12 +22,14 @@ namespace ProfetAPI.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly UserManager<ApplicationUser> _userManager;
+        private readonly IScoringAiService _scoringAi;
         private readonly string _frontendLoginUrl = "http://localhost:3000/login";
 
-        public SetupController(ApplicationDbContext context, UserManager<ApplicationUser> userManager)
+        public SetupController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, IScoringAiService scoringAi)
         {
             _context = context;
             _userManager = userManager;
+            _scoringAi = scoringAi;
         }
 
         // ════════════════════════════════════════════════════════════
@@ -109,11 +113,17 @@ namespace ProfetAPI.Controllers
                 .Where(r => accounts.Select(a => a.AccountId).Contains(r.AccountId) && r.IsActive)
                 .ToListAsync();
 
+            var accountPlaybooks = await _context.ActivityPlaybooks
+                .Include(p => p.Tasks)
+                .Where(p => accounts.Select(a => a.AccountId).Contains(p.AccountId) && p.IsDefault && !p.Deleted)
+                .ToListAsync();
+
             var accountChecklist = accounts.Select(a =>
             {
                 var funnel = a.Funnels.FirstOrDefault();
                 var scoring = scoringModels.FirstOrDefault(sm => sm.AccountId == a.AccountId);
                 var lostReasonCount = accountLostReasons.Count(r => r.AccountId == a.AccountId);
+                var playbook = accountPlaybooks.FirstOrDefault(p => p.AccountId == a.AccountId);
                 var fieldCount = accountCustomFields.Count(acf => acf.AccountId == a.AccountId);
                 var userCount = a.InternalUsers.Count;
                 var industryCount = accountIndustries.Count(ai => ai.AccountId == a.AccountId);
@@ -146,6 +156,11 @@ namespace ProfetAPI.Controllers
                     {
                         Done = userCount > 0,
                         Detail = $"{userCount} usuario(s) asignado(s)"
+                    },
+                    Playbook = new SetupChecklistItem
+                    {
+                        Done = playbook != null && playbook.Tasks.Any(),
+                        Detail = playbook != null ? $"{playbook.Tasks.Count} tarea(s)" : "Sin playbook"
                     }
                 };
             }).ToList();
@@ -865,6 +880,56 @@ namespace ProfetAPI.Controllers
         // SCORING
         // ════════════════════════════════════════════════════════════
 
+        // POST /api/setup/accounts/{accountId}/scoring/ai-generate?token=
+        // F5: asistente IA — el cliente describe su negocio y la IA propone preguntas/reglas/tiers
+        // (editable antes de guardar). No persiste nada todavía.
+        [HttpPost("accounts/{accountId}/scoring/ai-generate")]
+        [SwaggerOperation(Summary = "Generar una propuesta de calificación con IA a partir de una descripción del negocio")]
+        [SwaggerResponse(200, "Propuesta editable", typeof(GeneratedScoringProposalDto))]
+        [SwaggerResponse(401, "Token inválido")]
+        [SwaggerResponse(404, "Cuenta no encontrada")]
+        [SwaggerResponse(503, "IA no configurada")]
+        public async Task<IActionResult> GenerateScoringWithAi([FromQuery] string token, int accountId, [FromBody] SetupScoringAiPromptDto body)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+            if (!await AccountBelongsToCustomer(accountId, customer.Id))
+                return NotFound(new { message = "Cuenta no encontrada." });
+            if (!_scoringAi.IsConfigured) return StatusCode(503, new { message = "La IA no está configurada (falta Anthropic:ApiKey)." });
+            if (string.IsNullOrWhiteSpace(body.Prompt)) return BadRequest(new { message = "Describe tu negocio en el prompt." });
+
+            var proposal = await _scoringAi.GenerateFromPromptAsync(new GenerateQuestionsRequestDto
+            {
+                AccountId = accountId,
+                Prompt    = body.Prompt,
+                Industry  = body.Industry,
+            });
+            return Ok(proposal);
+        }
+
+        // POST /api/setup/accounts/{accountId}/scoring/ai-save?token=
+        // F5: guarda la propuesta (editada o no) como el modelo de calificación real de la cuenta.
+        [HttpPost("accounts/{accountId}/scoring/ai-save")]
+        [SwaggerOperation(Summary = "Guardar la propuesta de IA (editada) como modelo de calificación de la cuenta")]
+        [SwaggerResponse(200, "Modelo guardado")]
+        [SwaggerResponse(401, "Token inválido")]
+        [SwaggerResponse(404, "Cuenta no encontrada")]
+        public async Task<IActionResult> SaveScoringFromAi([FromQuery] string token, int accountId, [FromBody] GeneratedScoringProposalDto proposal)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+            if (!await AccountBelongsToCustomer(accountId, customer.Id))
+                return NotFound(new { message = "Cuenta no encontrada." });
+
+            var modelId = await _scoringAi.SaveModelAsync(new SaveScoringModelRequestDto
+            {
+                AccountId = accountId,
+                Name      = "Modelo de calificación",
+                Proposal  = proposal,
+            });
+            return Ok(new { scoringModelId = modelId });
+        }
+
         // GET /api/setup/accounts/{accountId}/scoring?token=
         [HttpGet("accounts/{accountId}/scoring")]
         [SwaggerOperation(Summary = "Modelo de calificación de la cuenta")]
@@ -1177,6 +1242,120 @@ namespace ProfetAPI.Controllers
                 await transaction.RollbackAsync();
                 return StatusCode(500, new { message = "Error al actualizar preguntas.", details = ex.Message });
             }
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // PLAYBOOK (F6: secuencia de tareas predeterminada, editable en el wizard)
+        // ════════════════════════════════════════════════════════════
+
+        // GET /api/setup/accounts/{accountId}/playbook/stages?token=
+        [HttpGet("accounts/{accountId}/playbook/stages")]
+        [SwaggerOperation(Summary = "Etapas del embudo de la cuenta (para el paso 'Avanzar a etapa')")]
+        public async Task<IActionResult> GetPlaybookStages([FromQuery] string token, int accountId)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+            if (!await AccountBelongsToCustomer(accountId, customer.Id))
+                return NotFound(new { message = "Cuenta no encontrada." });
+
+            var funnelId = await _context.Funnels.AsNoTracking()
+                .Where(f => f.AccountId == accountId)
+                .Select(f => (int?)f.FunnelId)
+                .FirstOrDefaultAsync();
+            if (funnelId == null) return Ok(Array.Empty<object>());
+
+            var stages = await _context.Stages.AsNoTracking()
+                .Where(s => s.FunnelId == funnelId.Value)
+                .OrderBy(s => s.Order)
+                .Select(s => new { s.StageId, s.Name, s.Order, s.Color })
+                .ToListAsync();
+            return Ok(stages);
+        }
+
+        // GET /api/setup/accounts/{accountId}/playbook?token=
+        [HttpGet("accounts/{accountId}/playbook")]
+        [SwaggerOperation(Summary = "Playbook predeterminado de la cuenta (secuencia de tareas al crear un lead)")]
+        [SwaggerResponse(200, "Playbook predeterminado")]
+        [SwaggerResponse(204, "La cuenta aún no tiene playbook")]
+        public async Task<IActionResult> GetSetupPlaybook([FromQuery] string token, int accountId)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+            if (!await AccountBelongsToCustomer(accountId, customer.Id))
+                return NotFound(new { message = "Cuenta no encontrada." });
+
+            var playbook = await _context.ActivityPlaybooks
+                .Where(p => p.AccountId == accountId && p.IsDefault && !p.Deleted)
+                .Include(p => p.Tasks)
+                .FirstOrDefaultAsync();
+            if (playbook == null) return NoContent();
+
+            return Ok(new
+            {
+                playbook.PlaybookId, playbook.Name, playbook.Description, playbook.IsActive, playbook.IsDefault,
+                tasks = playbook.Tasks.OrderBy(t => t.Order).Select(t => new
+                {
+                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.Description, t.Order, t.Priority, t.OffsetDays,
+                }),
+            });
+        }
+
+        // PUT /api/setup/accounts/{accountId}/playbook?token=
+        [HttpPut("accounts/{accountId}/playbook")]
+        [SwaggerOperation(Summary = "Crear/actualizar el playbook predeterminado de la cuenta")]
+        [SwaggerResponse(200, "Playbook guardado")]
+        public async Task<IActionResult> SaveSetupPlaybook([FromQuery] string token, int accountId, [FromBody] SetupPlaybookRequestDto req)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+            if (!await AccountBelongsToCustomer(accountId, customer.Id))
+                return NotFound(new { message = "Cuenta no encontrada." });
+            if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
+
+            var playbook = await _context.ActivityPlaybooks
+                .Include(p => p.Tasks)
+                .FirstOrDefaultAsync(p => p.AccountId == accountId && p.IsDefault && !p.Deleted);
+
+            if (playbook == null)
+            {
+                playbook = new ActivityPlaybook { AccountId = accountId, Name = req.Name.Trim(), IsActive = true, IsDefault = true, Deleted = false };
+                _context.ActivityPlaybooks.Add(playbook);
+                await _context.SaveChangesAsync();
+            }
+            else
+            {
+                playbook.Name        = req.Name.Trim();
+                playbook.Description = req.Description?.Trim();
+                _context.PlaybookTasks.RemoveRange(playbook.Tasks);
+            }
+
+            var steps = req.Tasks ?? new List<SetupPlaybookStepDto>();
+            for (int i = 0; i < steps.Count; i++)
+            {
+                _context.PlaybookTasks.Add(new PlaybookTask
+                {
+                    PlaybookId    = playbook.PlaybookId,
+                    TaskName      = (steps[i].TaskName ?? "").Trim(),
+                    ActionType    = string.IsNullOrWhiteSpace(steps[i].ActionType) ? "Task" : steps[i].ActionType!,
+                    TargetStageId = steps[i].TargetStageId,
+                    Description   = steps[i].Description?.Trim(),
+                    Order         = i + 1,
+                    Priority      = string.IsNullOrWhiteSpace(steps[i].Priority) ? "Media" : steps[i].Priority!,
+                    OffsetDays    = Math.Max(0, steps[i].OffsetDays),
+                });
+            }
+            await _context.SaveChangesAsync();
+
+            var saved = await _context.ActivityPlaybooks.Include(p => p.Tasks)
+                .FirstAsync(p => p.PlaybookId == playbook.PlaybookId);
+            return Ok(new
+            {
+                saved.PlaybookId, saved.Name, saved.Description, saved.IsActive, saved.IsDefault,
+                tasks = saved.Tasks.OrderBy(t => t.Order).Select(t => new
+                {
+                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.Description, t.Order, t.Priority, t.OffsetDays,
+                }),
+            });
         }
 
         // ════════════════════════════════════════════════════════════

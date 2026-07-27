@@ -54,7 +54,7 @@ public class ContactsController : ControllerBase
         // Contacts linked to leads OR deals from this account
         var leadContactIds = await _context.Leads
             .AsNoTracking()
-            .Where(l => l.AccountId == resolvedAccountId && l.ContactId != null && l.Deleted != true)
+            .Where(l => l.AccountId == resolvedAccountId && l.ContactId != null && (l.Deleted ?? false) == false)
             .Select(l => l.ContactId!.Value)
             .Distinct()
             .ToListAsync();
@@ -131,7 +131,7 @@ public class ContactsController : ControllerBase
         // Related leads
         var leads = await _context.Leads
             .AsNoTracking()
-            .Where(l => l.ContactId == id && l.Deleted != true)
+            .Where(l => l.ContactId == id && (l.Deleted ?? false) == false)
             .Select(l => new { l.LeadId, l.Name, l.Status, l.CreatedOn })
             .ToListAsync();
 

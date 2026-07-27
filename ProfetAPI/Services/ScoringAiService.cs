@@ -208,6 +208,34 @@ Responde en español.
         sb.AppendLine($"- Fuente: {lead.ProspectSource}");
         sb.AppendLine($"- Anuncio: {lead.AdName}");
         sb.AppendLine($"- Mensaje inicial: {lead.InitialMessage}");
+
+        // F4-T5: enriquecer con la conversación de WhatsApp reciente, si el lead está
+        // vinculado a un Contact CRM que a su vez tiene un WA Contact ligado.
+        if (lead.ContactId.HasValue)
+        {
+            var waContactId = await db.ContactsWhatsapp.AsNoTracking()
+                .Where(w => w.LinkedContactId == lead.ContactId.Value)
+                .Select(w => (int?)w.Id)
+                .FirstOrDefaultAsync(ct);
+
+            if (waContactId.HasValue)
+            {
+                var recentMessages = await db.MessagesWhatsapp.AsNoTracking()
+                    .Where(m => m.ContactId == waContactId.Value && m.MessageText != null)
+                    .OrderByDescending(m => m.CreatedAt)
+                    .Take(15)
+                    .Select(m => new { m.Direction, m.MessageText, m.CreatedAt })
+                    .ToListAsync(ct);
+
+                if (recentMessages.Count > 0)
+                {
+                    sb.AppendLine("\nConversación de WhatsApp reciente (más antiguo primero):");
+                    foreach (var m in recentMessages.OrderBy(m => m.CreatedAt))
+                        sb.AppendLine($"- {(m.Direction == "incoming" ? "Cliente" : "Agente")}: {m.MessageText}");
+                }
+            }
+        }
+
         sb.AppendLine("\nPreguntas y opciones (AnswerOptionId → texto):");
         foreach (var q in questions)
         {

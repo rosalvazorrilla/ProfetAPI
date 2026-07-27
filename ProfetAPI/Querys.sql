@@ -2944,3 +2944,49 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Deals_AccountId_Stage'
 CREATE INDEX IX_Deals_AccountId_Stage ON dbo.Deals(AccountId, StageId, CreatedOn DESC)
 INCLUDE (Status, DealName, QuotedAmount, FinalAmount, CloseDate, CompanyId, PrimaryContactId);
 GO
+
+-- ── CallPicker (click-to-call + webhook de llamadas) ──
+-- La tabla Activities (heredada del sistema viejo) nunca recibio la migracion completa
+-- del modelo Activity.cs: faltan ActivityType/Subject/OwnerUserId/EntityId/EntityType/IsCompleted.
+-- Esto rompia silenciosamente TasksController (columnas inexistentes) y bloqueaba Calls.
+-- El modelo C# ahora mapea ActivityId -> columna fisica "Id" (la PK/identity real);
+-- la columna "ActivityId" vieja queda sin usar (no se borra para no romper nada existente).
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'ActivityType')
+    ALTER TABLE dbo.Activities ADD ActivityType NVARCHAR(50) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'Subject')
+    ALTER TABLE dbo.Activities ADD Subject NVARCHAR(300) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'OwnerUserId')
+    ALTER TABLE dbo.Activities ADD OwnerUserId NVARCHAR(128) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'EntityId')
+    ALTER TABLE dbo.Activities ADD EntityId BIGINT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'EntityType')
+    ALTER TABLE dbo.Activities ADD EntityType NVARCHAR(50) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'IsCompleted')
+    ALTER TABLE dbo.Activities ADD IsCompleted BIT NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Activities_Entity' AND object_id = OBJECT_ID('dbo.Activities'))
+    CREATE INDEX IX_Activities_Entity ON dbo.Activities(EntityType, EntityId, ActivityType);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'CallDetails')
+CREATE TABLE dbo.CallDetails (
+    CallDetailId INT IDENTITY(1,1) PRIMARY KEY,
+    ActivityId   INT NOT NULL,
+    RecordingUrl NVARCHAR(500) NULL,
+    Duration     NVARCHAR(50) NULL,
+    CallSid      NVARCHAR(200) NULL,
+    CONSTRAINT UQ_CallDetails_ActivityId UNIQUE (ActivityId),
+    CONSTRAINT FK_CallDetails_Activities FOREIGN KEY (ActivityId) REFERENCES dbo.Activities(Id)
+);
+GO
+
+-- ⚠️ A PARTIR DE AQUÍ ESTE ARCHIVO YA NO ES LA FUENTE OFICIAL (2026-07-17).
+-- Todo lo pendiente de ejecutar contra Profet_new vive ahora en
+-- ProfetAPI/ProfetAPI/scripts_profet_new.sql — incluyendo el fix de índices
+-- de ScoringAnswerOptions/ScoringQuestions que estuvo brevemente aquí y se
+-- movió allá. No agregues nada nuevo en este archivo, usa scripts_profet_new.sql.

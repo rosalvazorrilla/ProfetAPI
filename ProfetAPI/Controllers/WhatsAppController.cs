@@ -29,18 +29,21 @@ public class WhatsAppController : ControllerBase
     private readonly ILogger<WhatsAppController> _logger;
     private readonly IHubContext<WhatsAppHub> _hub;
     private readonly TwoChatService _twoChatService;
+    private readonly ILeadRescoreTrigger _rescoreTrigger;
 
     // 2Chat endpoint para envío
     private const string TwoChatSendUrl = "https://api.p.2chat.io/open/whatsapp/send-message";
 
     public WhatsAppController(ApplicationDbContext db, IHttpClientFactory httpFactory,
-        ILogger<WhatsAppController> logger, IHubContext<WhatsAppHub> hub, TwoChatService twoChatService)
+        ILogger<WhatsAppController> logger, IHubContext<WhatsAppHub> hub, TwoChatService twoChatService,
+        ILeadRescoreTrigger rescoreTrigger)
     {
         _db = db;
         _httpFactory = httpFactory;
         _logger = logger;
         _hub = hub;
         _twoChatService = twoChatService;
+        _rescoreTrigger = rescoreTrigger;
     }
 
     // ====================================================================
@@ -861,6 +864,19 @@ public class WhatsAppController : ControllerBase
         await _db.SaveChangesAsync();
 
         _logger.LogInformation("Mensaje {Dir} guardado: contactId={CId}, uuid={Uuid}", direction, waContact.Id, uuid);
+
+        // F4-T4/F4-T5: si este contacto de WA ya está vinculado a un Contact CRM, y ese
+        // Contact tiene Lead(s) asociados, un mensaje entrante es información nueva —
+        // dispara re-scoring (con cooldown) para cada lead vinculado.
+        if (direction == "incoming" && waContact.LinkedContactId is int linkedContactId)
+        {
+            var leadIds = await _db.Leads.AsNoTracking()
+                .Where(l => l.ContactId == linkedContactId)
+                .Select(l => l.LeadId)
+                .ToListAsync();
+            foreach (var leadId in leadIds)
+                _rescoreTrigger.MaybeRescore(leadId);
+        }
 
         // Emitir notificación SignalR a los agentes del tenant
         var payload = BuildMessagePayload(msg);

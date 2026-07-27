@@ -7,6 +7,31 @@ namespace ProfetAPI.Dtos
     // STATUS / CHECKLIST
     // ════════════════════════════════════════════════════════════
 
+    // F5: asistente IA de scoring en el wizard
+    public class SetupScoringAiPromptDto
+    {
+        public string Prompt { get; set; } = "";
+        public string? Industry { get; set; }
+    }
+
+    // F6: playbook (secuencia de tareas) predeterminado, configurable en el wizard
+    public class SetupPlaybookRequestDto
+    {
+        public string  Name        { get; set; } = "";
+        public string? Description { get; set; }
+        public List<SetupPlaybookStepDto>? Tasks { get; set; }
+    }
+
+    public class SetupPlaybookStepDto
+    {
+        public string? TaskName      { get; set; }
+        public string? ActionType    { get; set; }
+        public int?    TargetStageId { get; set; }
+        public string? Description   { get; set; }
+        public string? Priority      { get; set; }
+        public int     OffsetDays    { get; set; }
+    }
+
     public class SetupStatusDto
     {
         public int CustomerId { get; set; }
@@ -30,6 +55,7 @@ namespace ProfetAPI.Dtos
         public SetupChecklistItem Scoring { get; set; } = new();
         public SetupChecklistItem Catalogs { get; set; } = new();
         public SetupChecklistItem Users { get; set; } = new();
+        public SetupChecklistItem Playbook { get; set; } = new();
     }
 
     public class SetupChecklistItem

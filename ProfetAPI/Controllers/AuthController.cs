@@ -2,6 +2,8 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.EntityFrameworkCore;
+using ProfetAPI.Data;
 using ProfetAPI.Dtos;
 using ProfetAPI.Models;
 using Swashbuckle.AspNetCore.Annotations; // <--- 1. AGREGADO
@@ -18,11 +20,13 @@ namespace ProfetAPI.Controllers
     {
         private readonly UserManager<ApplicationUser> _userManager;
         private readonly IConfiguration _configuration;
+        private readonly ApplicationDbContext _context;
 
-        public AuthController(UserManager<ApplicationUser> userManager, IConfiguration configuration)
+        public AuthController(UserManager<ApplicationUser> userManager, IConfiguration configuration, ApplicationDbContext context)
         {
             _userManager = userManager;
             _configuration = configuration;
+            _context = context;
         }
 
         [HttpPost("login")]
@@ -75,6 +79,8 @@ namespace ProfetAPI.Controllers
                     signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
                 );
 
+                var isTeamLeader = await _context.Teams.AnyAsync(t => t.LeaderId == user.Id);
+
                 // Devolvemos el objeto LoginResponseDto para que coincida con la documentación
                 return Ok(new LoginResponseDto
                 {
@@ -84,6 +90,7 @@ namespace ProfetAPI.Controllers
                     Email = user.Email ?? "",
                     Role = userRoles.FirstOrDefault() ?? "User",
                     CustomerId = user.CustomerId ?? 0,
+                    IsTeamLeader = isTeamLeader,
                 });
             }
 

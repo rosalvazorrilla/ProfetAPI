@@ -561,7 +561,7 @@ public class DealsController : ControllerBase
     [SwaggerOperation(Summary = "Lista de customers (AdminGlobal)")]
     public async Task<IActionResult> GetCustomers([FromQuery] bool activeOnly = true)
     {
-        var q = _context.Customers.AsNoTracking().Where(c => c.Deleted != true);
+        var q = _context.Customers.AsNoTracking().Where(c => (c.Deleted ?? false) == false);
         if (activeOnly) q = q.Where(c => c.Active == true);
         var list = await q
             .OrderBy(c => c.Name)

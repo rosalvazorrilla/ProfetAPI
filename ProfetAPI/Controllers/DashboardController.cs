@@ -15,11 +15,13 @@ public class DashboardController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
     private readonly MetaAdsService _metaAds;
+    private readonly IMetricsAnomalyService _anomaly;
 
-    public DashboardController(ApplicationDbContext db, MetaAdsService metaAds)
+    public DashboardController(ApplicationDbContext db, MetaAdsService metaAds, IMetricsAnomalyService anomaly)
     {
         _db      = db;
         _metaAds = metaAds;
+        _anomaly = anomaly;
     }
 
     private string? CurrentUserId   => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -62,7 +64,7 @@ public class DashboardController : ControllerBase
 
         // ── Leads ─────────────────────────────────────────────────────────────
         var leadsQ = _db.Leads.AsNoTracking()
-            .Where(l => l.AccountId == resolvedAccountId && l.Deleted != true);
+            .Where(l => l.AccountId == resolvedAccountId && (l.Deleted ?? false) == false);
 
         var leadsCur  = await leadsQ.CountAsync(l => l.CreatedOn >= curFrom);
         var leadsPrev = await leadsQ.CountAsync(l => l.CreatedOn >= prevFrom && l.CreatedOn < prevTo);
@@ -180,7 +182,7 @@ public class DashboardController : ControllerBase
         // ── Rendimiento por vendedor ──────────────────────────────────────────
         var teamLeads = await _db.Leads
             .AsNoTracking()
-            .Where(l => l.AccountId == resolvedAccountId && l.Deleted != true
+            .Where(l => l.AccountId == resolvedAccountId && (l.Deleted ?? false) == false
                 && l.CreatedOn >= curFrom && l.OwnerUserId != null)
             .GroupBy(l => new { l.OwnerUserId, l.Owner!.UserName })
             .Select(g => new { userId = g.Key.OwnerUserId, name = g.Key.UserName, leadsCount = g.Count() })
@@ -205,10 +207,26 @@ public class DashboardController : ControllerBase
             })
             .ToListAsync();
 
+        // D8: gating por rol — el desglose por vendedor (comparativo entre compañeros)
+        // solo lo ve AdminGlobal o quien lidere algún equipo de este cliente; el resto
+        // solo ve su propia fila.
+        var canSeeTeamBreakdown = IsAdminGlobal;
+        if (!canSeeTeamBreakdown && CurrentUserId != null)
+        {
+            var customerIdForTeams = await _db.Accounts.AsNoTracking()
+                .Where(a => a.AccountId == resolvedAccountId)
+                .Select(a => (int?)a.CustomerId)
+                .FirstOrDefaultAsync();
+            canSeeTeamBreakdown = customerIdForTeams != null && await _db.Teams.AsNoTracking()
+                .AnyAsync(t => t.CustomerId == customerIdForTeams && t.LeaderId == CurrentUserId);
+        }
+
         // Merge team data by userId
         var allUserIds = teamLeads.Select(x => x.userId)
             .Union(teamDeals.Select(x => x.userId))
-            .Distinct().ToList();
+            .Distinct()
+            .Where(uid => canSeeTeamBreakdown || uid == CurrentUserId)
+            .ToList();
 
         var teamStats = allUserIds.Select(uid => new
         {
@@ -222,6 +240,11 @@ public class DashboardController : ControllerBase
         .OrderByDescending(x => x.won)
         .Take(10)
         .ToList();
+
+        // D7: alertas de anomalías (caídas/subidas fuertes vs. período anterior)
+        _anomaly.CheckAndNotify(resolvedAccountId, "leads_new", "Los prospectos nuevos", leadsCur, leadsPrev);
+        _anomaly.CheckAndNotify(resolvedAccountId, "deals_won", "Los tratos ganados", dealsWonCur, dealsWonPrev);
+        _anomaly.CheckAndNotify(resolvedAccountId, "conversion_rate", "La tasa de conversión", convCur, convPrev);
 
         return Ok(new
         {
@@ -243,6 +266,7 @@ public class DashboardController : ControllerBase
             leadsBySource,
             stagesFunnel  = funnelWithPct,
             teamStats,
+            teamStatsRestricted = !canSeeTeamBreakdown,
         });
     }
 
@@ -327,7 +351,7 @@ public class DashboardController : ControllerBase
         var curFrom  = now.AddDays(-days);
         var prevFrom = curFrom.AddDays(-days);
 
-        var leadsQ = _db.Leads.AsNoTracking().Where(l => l.AccountId == resolvedAccountId && l.Deleted != true);
+        var leadsQ = _db.Leads.AsNoTracking().Where(l => l.AccountId == resolvedAccountId && (l.Deleted ?? false) == false);
 
         // Distribución por tier
         var tierRaw = await leadsQ
@@ -410,7 +434,7 @@ public class DashboardController : ControllerBase
         // ── Leads de Meta ────────────────────────────────────────────────────
         var metaQ = _db.Leads.AsNoTracking()
             .Where(l => l.AccountId == resolvedAccountId
-                     && l.Deleted != true
+                     && (l.Deleted ?? false) == false
                      && l.ProspectSource == "Meta Lead Ads");
 
         var totalCur  = await metaQ.CountAsync(l => l.CreatedOn >= curFrom);

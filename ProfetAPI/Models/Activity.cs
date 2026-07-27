@@ -5,6 +5,7 @@ namespace ProfetAPI.Models;
 public class Activity
 {
     [Key]
+    [Column("Id")]
     public int ActivityId { get; set; }
     public string? ActivityType { get; set; }
     public string? Subject { get; set; }

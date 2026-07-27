@@ -22,6 +22,7 @@ public class LeadsController : ControllerBase
     private readonly ProfetAPI.Services.IScoringAiService _scoringAi;
     private readonly ProfetAPI.Services.INotificationService _notify;
     private readonly ProfetAPI.Services.INextActionService _nextAction;
+    private readonly ProfetAPI.Services.ILeadRescoreTrigger _rescoreTrigger;
     private readonly IServiceScopeFactory _scopeFactory;
 
     public LeadsController(
@@ -33,17 +34,19 @@ public class LeadsController : ControllerBase
         ProfetAPI.Services.IScoringAiService scoringAi,
         ProfetAPI.Services.INotificationService notify,
         ProfetAPI.Services.INextActionService nextAction,
+        ProfetAPI.Services.ILeadRescoreTrigger rescoreTrigger,
         IServiceScopeFactory scopeFactory)
     {
-        _context      = context;
-        _automations  = automations;
-        _playbooks    = playbooks;
-        _scoring      = scoring;
-        _timeline     = timeline;
-        _scoringAi    = scoringAi;
-        _notify       = notify;
-        _nextAction   = nextAction;
-        _scopeFactory = scopeFactory;
+        _context        = context;
+        _automations    = automations;
+        _playbooks      = playbooks;
+        _scoring        = scoring;
+        _timeline       = timeline;
+        _scoringAi      = scoringAi;
+        _notify         = notify;
+        _nextAction     = nextAction;
+        _rescoreTrigger = rescoreTrigger;
+        _scopeFactory   = scopeFactory;
     }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -63,6 +66,7 @@ public class LeadsController : ControllerBase
         [FromQuery] string? prospectSource,
         [FromQuery] string? ownerId,
         [FromQuery] int? tagId,
+        [FromQuery] bool unassigned = false,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50)
     {
@@ -90,7 +94,7 @@ public class LeadsController : ControllerBase
 
         // Build query — only load what we need, avoid deep Include chains
         var query = _context.Leads
-            .Where(l => l.AccountId == resolvedAccountId && l.Deleted != true);
+            .Where(l => l.AccountId == resolvedAccountId && (l.Deleted ?? false) == false);
 
         // Filtros
         if (!string.IsNullOrWhiteSpace(search))
@@ -108,7 +112,9 @@ public class LeadsController : ControllerBase
             query = query.Where(l => l.Status == status);
         if (!string.IsNullOrWhiteSpace(prospectSource))
             query = query.Where(l => l.ProspectSource == prospectSource);
-        if (!string.IsNullOrWhiteSpace(ownerId))
+        if (unassigned)
+            query = query.Where(l => l.OwnerUserId == null);
+        else if (!string.IsNullOrWhiteSpace(ownerId))
             query = query.Where(l => l.OwnerUserId == ownerId);
         if (tagId.HasValue)
             query = query.Where(l => _context.Taggings.Any(t => t.LeadId == (int)l.LeadId && t.TagId == tagId.Value));
@@ -380,7 +386,7 @@ public class LeadsController : ControllerBase
         var sources = await _context.Leads
             .Where(l => l.AccountId == resolvedAccountId
                      && l.ProspectSource != null
-                     && l.Deleted != true)
+                     && (l.Deleted ?? false) == false)
             .Select(l => l.ProspectSource!)
             .Distinct()
             .OrderBy(s => s)
@@ -450,7 +456,7 @@ public class LeadsController : ControllerBase
     {
         var lead = await _context.Leads
             .AsNoTracking()
-            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
             .Select(l => new
             {
                 l.LeadId, l.Name, l.Email, l.Phone, l.Company,
@@ -698,6 +704,39 @@ public class LeadsController : ControllerBase
         return Ok(new { leadId = lead.LeadId, status = lead.Status });
     }
 
+    // PATCH /api/leads/{id}/assign  — asignar responsable (bandeja de sin asignar)
+    [HttpPatch("{id:long}/assign")]
+    [SwaggerOperation(Summary = "Asignar un responsable al prospecto")]
+    [SwaggerResponse(200, "Asignado")]
+    [SwaggerResponse(404, "No encontrado")]
+    public async Task<IActionResult> AssignLead(long id, [FromBody] AssignLeadDto model)
+    {
+        var lead = await _context.Leads.FindAsync(id);
+        if (lead == null || lead.Deleted == true) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        if (lead.AccountId != null)
+        {
+            var ownerBelongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == model.OwnerUserId);
+            if (!ownerBelongs) return BadRequest(new { message = "El usuario no pertenece a esta cuenta." });
+        }
+
+        lead.OwnerUserId = model.OwnerUserId;
+        await _context.SaveChangesAsync();
+
+        await _notify.NotifyAsync(model.OwnerUserId, $"Prospecto asignado: {lead.Name}",
+            entityType: "Lead", entityId: lead.LeadId);
+
+        return Ok(new { leadId = lead.LeadId, ownerUserId = lead.OwnerUserId });
+    }
+
     // GET /api/leads/{id}/scoring  — cuestionario de calificación con respuestas actuales
     [HttpGet("{id:long}/scoring")]
     [SwaggerOperation(Summary = "Cuestionario de calificación y respuestas actuales del lead")]
@@ -705,7 +744,7 @@ public class LeadsController : ControllerBase
     public async Task<IActionResult> GetScoring(long id)
     {
         var lead = await _context.Leads.AsNoTracking()
-            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
             .Select(l => new { l.AccountId })
             .FirstOrDefaultAsync();
         if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
@@ -823,7 +862,7 @@ public class LeadsController : ControllerBase
     public async Task<IActionResult> SaveScoringAnswers(long id, [FromBody] List<ScoringAnswerDto> answers)
     {
         var lead = await _context.Leads
-            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
             .FirstOrDefaultAsync();
         if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
 
@@ -895,7 +934,7 @@ public class LeadsController : ControllerBase
     public async Task<IActionResult> ScoreWithAi(long id)
     {
         var lead = await _context.Leads.AsNoTracking()
-            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
             .Select(l => new { l.AccountId, l.OwnerUserId, l.Name }).FirstOrDefaultAsync();
         if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
 
@@ -934,7 +973,7 @@ public class LeadsController : ControllerBase
     public async Task<IActionResult> GetNextAction(long id)
     {
         var lead = await _context.Leads.AsNoTracking()
-            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
             .Select(l => new { l.AccountId }).FirstOrDefaultAsync();
         if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
 
@@ -1027,6 +1066,10 @@ public class LeadsController : ControllerBase
 
         await _timeline.LogAsync(lead.AccountId.Value, "Lead", id, "note", "Nota",
             detail: dto.Text.Trim(), userId: CurrentUserId);
+
+        // F4-T4: la nota es información nueva sobre el lead — dispara re-scoring (con cooldown)
+        _rescoreTrigger.MaybeRescore(id);
+
         return Ok(new { added = true });
     }
 
@@ -1039,7 +1082,7 @@ public class LeadsController : ControllerBase
     public async Task<IActionResult> ConvertToDeal(long id, [FromBody] ConvertToDealDto model)
     {
         var lead = await _context.Leads
-            .Where(l => l.LeadId == id && l.Deleted != true)
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
             .FirstOrDefaultAsync();
         if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
 
@@ -1214,7 +1257,7 @@ public class LeadsController : ControllerBase
     [SwaggerOperation(Summary = "Lista de clientes (AdminGlobal)")]
     public async Task<IActionResult> GetCustomers([FromQuery] bool activeOnly = true)
     {
-        var q = _context.Customers.AsNoTracking().Where(c => c.Deleted != true);
+        var q = _context.Customers.AsNoTracking().Where(c => (c.Deleted ?? false) == false);
         if (activeOnly) q = q.Where(c => c.Active == true);
         var list = await q
             .OrderBy(c => c.Name)
@@ -1274,6 +1317,11 @@ public class CreateLeadDto
 public class UpdateLeadStatusDto
 {
     public string Status { get; set; } = "Nuevo";
+}
+
+public class AssignLeadDto
+{
+    public string OwnerUserId { get; set; } = null!;
 }
 
 public class ScoringAnswerDto

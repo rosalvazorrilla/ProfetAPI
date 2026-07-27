@@ -98,6 +98,36 @@ public class MetricsController : ControllerBase
         return Ok(new { found = true, s.Query, s.Title, s.Reason, series });
     }
 
+    // POST /api/metrics/ask?accountId=  — D6: pregúntale a tus datos (Q&A en lenguaje natural)
+    [HttpPost("ask")]
+    [SwaggerOperation(Summary = "Responder una pregunta en lenguaje natural sobre las métricas de la cuenta")]
+    public async Task<IActionResult> Ask([FromQuery] int? accountId, [FromBody] AskDataDto body)
+    {
+        var acId = await ResolveAccountId(accountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta." });
+        if (!_ai.IsConfigured) return StatusCode(503, new { message = "La IA no está configurada." });
+        if (string.IsNullOrWhiteSpace(body.Question)) return BadRequest(new { message = "Escribe una pregunta." });
+
+        var result = await _ai.AskDataAsync(acId.Value, body.Question, body.Locale ?? "es");
+        if (result == null)
+            return Ok(new { found = false, message = "No pude responder esa pregunta con los datos disponibles." });
+
+        return Ok(new { found = true, answer = result.Answer, queries = result.Queries, series = result.Series });
+    }
+
+    // GET /api/metrics/narrative?accountId=&days=30  — D5: resumen narrativo del período
+    [HttpGet("narrative")]
+    [SwaggerOperation(Summary = "Resumen narrativo (IA) de las métricas del período vs. el anterior")]
+    public async Task<IActionResult> Narrative([FromQuery] int? accountId, [FromQuery] int days = 30, [FromQuery] string? locale = "es")
+    {
+        var acId = await ResolveAccountId(accountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta." });
+        if (!_ai.IsConfigured) return Ok(new { available = false });
+
+        var summary = await _ai.NarrativeSummaryAsync(acId.Value, days, locale ?? "es");
+        return Ok(new { available = summary != null, summary });
+    }
+
     // ── Reportes guardados (D2-T2) ────────────────────────────────────────────
 
     // GET /api/metrics/reports?accountId=
@@ -167,6 +197,12 @@ public class MetricsController : ControllerBase
 public class MetricPromptDto
 {
     public string Prompt { get; set; } = "";
+}
+
+public class AskDataDto
+{
+    public string  Question { get; set; } = "";
+    public string? Locale   { get; set; }
 }
 
 public class SaveReportDto

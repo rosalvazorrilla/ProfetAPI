@@ -19,5 +19,8 @@ namespace ProfetAPI.Dtos
 
         [SwaggerSchema("ID del tenant (Customer) al que pertenece el usuario. 0 si es AdminGlobal.")]
         public int CustomerId { get; set; }
+
+        [SwaggerSchema("True si el usuario es líder de al menos un Team (Team.LeaderId). Habilita la gestión de su propio equipo.")]
+        public bool IsTeamLeader { get; set; }
     }
 }

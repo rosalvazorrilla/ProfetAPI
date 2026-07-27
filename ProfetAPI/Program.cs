@@ -97,10 +97,22 @@ builder.Services.AddScoped<ProfetAPI.Services.ScoringCalculator>();
 // IA de scoring (generador desde prompt + scoring runtime)
 builder.Services.AddScoped<ProfetAPI.Services.IScoringAiService, ProfetAPI.Services.ScoringAiService>();
 
+// F4-T4: re-scoring automático cuando llega info nueva al lead (con cooldown)
+builder.Services.AddSingleton<ProfetAPI.Services.ILeadRescoreTrigger, ProfetAPI.Services.LeadRescoreTrigger>();
+
+// D7: alertas de anomalías en métricas del dashboard (con dedup diario)
+builder.Services.AddSingleton<ProfetAPI.Services.IMetricsAnomalyService, ProfetAPI.Services.MetricsAnomalyService>();
+
+// D4: cache en memoria de vínculos Google Ads pendientes de confirmar (OAuth)
+builder.Services.AddSingleton<ProfetAPI.Services.GoogleAdsOAuthPendingStore>();
+
 // Analítica: catálogo de métricas + motor de consultas seguro + IA analítica
 builder.Services.AddScoped<ProfetAPI.Services.Metrics.MetricsCatalog>();
 builder.Services.AddScoped<ProfetAPI.Services.Metrics.MetricsQueryService>();
 builder.Services.AddScoped<ProfetAPI.Services.Metrics.MetricsAiService>();
+
+// IA de la bandeja unificada (resumen + sugerencia de respuesta)
+builder.Services.AddScoped<ProfetAPI.Services.IInboxAiService, ProfetAPI.Services.InboxAiService>();
 
 // Línea de tiempo (timeline) por lead/deal
 builder.Services.AddScoped<ProfetAPI.Services.ITimelineLogger, ProfetAPI.Services.TimelineLogger>();
@@ -111,6 +123,9 @@ builder.Services.AddScoped<ProfetAPI.Services.INotificationService, ProfetAPI.Se
 // Próxima mejor acción (IA, con caché en memoria)
 builder.Services.AddMemoryCache();
 builder.Services.AddScoped<ProfetAPI.Services.INextActionService, ProfetAPI.Services.NextActionService>();
+
+// Importación de leads (CSV/Excel + mapeo de columnas con IA)
+builder.Services.AddScoped<ProfetAPI.Services.ILeadImportService, ProfetAPI.Services.LeadImportService>();
 
 // --- 5b. Servicios de Controladores, SignalR y Swagger ---
 builder.Services.AddSignalR();
