@@ -1,5 +1,6 @@
-using System.Net;
-using System.Net.Mail;
+using MailKit.Net.Smtp;
+using MailKit.Security;
+using MimeKit;
 
 namespace ProfetAPI.Services;
 
@@ -64,27 +65,21 @@ public class EmailService : IEmailService
 
         try
         {
-            using var smtp = new SmtpClient(cfg.Host, cfg.Port)
-            {
-                Credentials           = new NetworkCredential(cfg.User, cfg.Password),
-                EnableSsl             = cfg.EnableSsl,
-                DeliveryMethod        = SmtpDeliveryMethod.Network,
-                UseDefaultCredentials = false,
-            };
+            var msg = new MimeMessage();
+            msg.From.Add(new MailboxAddress(cfg.FromName, cfg.FromAddress));
+            msg.To.Add(MailboxAddress.Parse(to));
+            if (!string.IsNullOrWhiteSpace(cc))      msg.Cc.Add(MailboxAddress.Parse(cc));
+            if (!string.IsNullOrWhiteSpace(replyTo)) msg.ReplyTo.Add(MailboxAddress.Parse(replyTo));
+            msg.Subject = subject;
+            msg.Body = new BodyBuilder { HtmlBody = bodyHtml }.ToMessageBody();
 
-            using var msg = new MailMessage
-            {
-                From       = new MailAddress(cfg.FromAddress, cfg.FromName),
-                Subject    = subject,
-                Body       = bodyHtml,
-                IsBodyHtml = true,
-            };
+            using var smtp = new SmtpClient();
+            var security = cfg.EnableSsl ? SecureSocketOptions.Auto : SecureSocketOptions.None;
+            await smtp.ConnectAsync(cfg.Host, cfg.Port, security);
+            await smtp.AuthenticateAsync(cfg.User, cfg.Password);
+            await smtp.SendAsync(msg);
+            await smtp.DisconnectAsync(true);
 
-            msg.To.Add(to);
-            if (!string.IsNullOrWhiteSpace(cc))      msg.CC.Add(cc);
-            if (!string.IsNullOrWhiteSpace(replyTo)) msg.ReplyToList.Add(new MailAddress(replyTo));
-
-            await smtp.SendMailAsync(msg);
             _logger.LogInformation("Email enviado a {To} via {Source}", to, cfg.IsCustom ? "cuenta propia" : "Profet global");
             return (true, null);
         }
