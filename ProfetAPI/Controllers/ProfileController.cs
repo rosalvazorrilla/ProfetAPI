@@ -25,6 +25,18 @@ public class ProfileController : ControllerBase
 
     private string CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "";
     private string? CurrentUserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+    private bool IsAdminGlobal => CurrentUserRole == "AdminGlobal";
+
+    /// <summary>AdminGlobal puede pasar accountId por query (no pertenece a ninguna cuenta); el resto siempre resuelve la suya propia.</summary>
+    private async Task<int?> ResolveAccountId(int? accountId)
+    {
+        if (IsAdminGlobal) return accountId;
+        return await _context.AccountInternalUsers
+            .AsNoTracking()
+            .Where(a => a.UserId == CurrentUserId)
+            .Select(a => (int?)a.AccountId)
+            .FirstOrDefaultAsync();
+    }
 
     // GET /api/profile  — datos del usuario logueado
     [HttpGet]
@@ -160,16 +172,11 @@ public class ProfileController : ControllerBase
 
     // GET /api/profile/team  — equipo de la cuenta del usuario
     [HttpGet("team")]
-    [SwaggerOperation(Summary = "Usuarios del equipo de la cuenta del usuario autenticado")]
+    [SwaggerOperation(Summary = "Usuarios del equipo de la cuenta del usuario autenticado (AdminGlobal puede pasar accountId)")]
     [SwaggerResponse(200, "Lista de usuarios del equipo")]
-    public async Task<IActionResult> GetTeam()
+    public async Task<IActionResult> GetTeam([FromQuery] int? accountId)
     {
-        // Get the account for the current user
-        var accountId = await _context.AccountInternalUsers
-            .AsNoTracking()
-            .Where(a => a.UserId == CurrentUserId)
-            .Select(a => (int?)a.AccountId)
-            .FirstOrDefaultAsync();
+        accountId = await ResolveAccountId(accountId);
 
         if (!accountId.HasValue)
             return Ok(new { team = Array.Empty<object>(), accountId = (int?)null });
@@ -195,15 +202,11 @@ public class ProfileController : ControllerBase
 
     // GET /api/profile/funnel  — embudo de la cuenta del usuario
     [HttpGet("funnel")]
-    [SwaggerOperation(Summary = "Embudo y etapas de la cuenta del usuario autenticado")]
+    [SwaggerOperation(Summary = "Embudo y etapas de la cuenta del usuario autenticado (AdminGlobal puede pasar accountId)")]
     [SwaggerResponse(200, "Datos del embudo")]
-    public async Task<IActionResult> GetFunnel()
+    public async Task<IActionResult> GetFunnel([FromQuery] int? accountId)
     {
-        var accountId = await _context.AccountInternalUsers
-            .AsNoTracking()
-            .Where(a => a.UserId == CurrentUserId)
-            .Select(a => (int?)a.AccountId)
-            .FirstOrDefaultAsync();
+        accountId = await ResolveAccountId(accountId);
 
         if (!accountId.HasValue)
             return Ok(new { hasFunnel = false });
