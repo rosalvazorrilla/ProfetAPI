@@ -91,7 +91,11 @@ public class EmailService : IEmailService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error enviando email a {To}", to);
-            return (false, ex.Message);
+            var detail = ex.InnerException?.Message;
+            var message = string.IsNullOrWhiteSpace(detail) || detail == ex.Message
+                ? ex.Message
+                : $"{ex.Message} — {detail}";
+            return (false, message);
         }
     }
 }
