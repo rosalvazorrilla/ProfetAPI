@@ -157,9 +157,35 @@ public class EmailsController : ControllerBase
 
         var resolvedAccountId = await ResolveAccountId(dto.AccountId);
 
-        // Resolver config SMTP: ¿tiene la cuenta su propio SMTP verificado?
+        // Resolver config SMTP, en orden de prioridad:
+        // 1. El correo propio del remitente (seguimiento personal a prospectos)
+        // 2. El correo compartido de la cuenta (notificaciones/fallback de equipo)
+        // 3. null → EmailService usa la config global de Profet
         SmtpConfig? smtpConfig = null;
-        if (resolvedAccountId.HasValue)
+
+        var userConfig = await _context.UserEmailConfigs
+            .Where(c => c.UserId == CurrentUserId)
+            .Select(c => new { c.SmtpEnabled, c.SmtpIsVerified, c.SmtpHost, c.SmtpPort, c.SmtpUser, c.SmtpPassword, c.SmtpFromAddress, c.SmtpFromName, c.SmtpEnableSsl })
+            .FirstOrDefaultAsync();
+
+        if (userConfig?.SmtpEnabled == true && userConfig.SmtpIsVerified == true
+            && !string.IsNullOrWhiteSpace(userConfig.SmtpHost)
+            && !string.IsNullOrWhiteSpace(userConfig.SmtpUser)
+            && !string.IsNullOrWhiteSpace(userConfig.SmtpPassword)
+            && !string.IsNullOrWhiteSpace(userConfig.SmtpFromAddress))
+        {
+            smtpConfig = new SmtpConfig(
+                Host:        userConfig.SmtpHost!,
+                Port:        userConfig.SmtpPort ?? 587,
+                User:        userConfig.SmtpUser!,
+                Password:    userConfig.SmtpPassword!,
+                FromAddress: userConfig.SmtpFromAddress!,
+                FromName:    userConfig.SmtpFromName ?? "CRM",
+                EnableSsl:   userConfig.SmtpEnableSsl ?? true,
+                IsCustom:    true
+            );
+        }
+        else if (resolvedAccountId.HasValue)
         {
             var account = await _context.Accounts
                 .Where(a => a.AccountId == resolvedAccountId)

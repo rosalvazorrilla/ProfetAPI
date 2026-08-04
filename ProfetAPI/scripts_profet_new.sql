@@ -54,6 +54,29 @@
 --   Texto completo del DDL: ver historial de conversación / git blame de
 --   este archivo.
 
+-- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
+-- 2026-08-04 — Correo de seguimiento por usuario: cada vendedor puede conectar su
+-- propio SMTP para que las respuestas de sus prospectos le lleguen a él, en vez de
+-- a un buzón compartido de la cuenta. Se prioriza sobre Accounts.Smtp* al enviar
+-- (ver EmailsController.Send). Idempotente.
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'UserEmailConfigs')
+CREATE TABLE dbo.UserEmailConfigs (
+    UserId          NVARCHAR(450) NOT NULL PRIMARY KEY,
+    SmtpEnabled     BIT NULL,
+    SmtpHost        NVARCHAR(200) NULL,
+    SmtpPort        INT NULL,
+    SmtpUser        NVARCHAR(200) NULL,
+    SmtpPassword    NVARCHAR(500) NULL,
+    SmtpFromAddress NVARCHAR(200) NULL,
+    SmtpFromName    NVARCHAR(200) NULL,
+    SmtpEnableSsl   BIT NULL,
+    SmtpIsVerified  BIT NULL,
+    SmtpVerifiedAt  DATETIME2 NULL,
+    SmtpLastError   NVARCHAR(MAX) NULL,
+    CONSTRAINT FK_UserEmailConfigs_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(Id) ON DELETE CASCADE
+);
+GO
+
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
 -- 32 tablas huérfanas en Profet_new SÍ tienen datos reales (nadie las lee hoy;
 -- LeadCalls/LeadFiles/Calls/AccountUsers/Webhooks ya se sacaron de esta

@@ -10,6 +10,7 @@ namespace ProfetAPI.Data
         // --- DBSETS PARA USUARIOS Y CRM BASE ---
         public DbSet<Customer> Customers { get; set; } = null!;
         public DbSet<UserProfile> UserProfiles { get; set; } = null!;
+        public DbSet<UserEmailConfig> UserEmailConfigs { get; set; } = null!;
         public DbSet<Team> Teams { get; set; } = null!;
         public DbSet<UserTeam> UserTeams { get; set; } = null!;
 
@@ -175,6 +176,7 @@ namespace ProfetAPI.Data
             // Relaciones Específicas
             builder.Entity<ApplicationUser>(b => {
                 b.HasOne(u => u.UserProfile).WithOne(p => p.User).HasForeignKey<UserProfile>(p => p.UserId);
+                b.HasOne(u => u.EmailConfig).WithOne(c => c.User).HasForeignKey<UserEmailConfig>(c => c.UserId);
                 b.HasMany(u => u.Subordinates).WithOne(u => u.Parent).HasForeignKey(u => u.ParentId).OnDelete(DeleteBehavior.Restrict);
             });
 
