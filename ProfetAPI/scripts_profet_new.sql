@@ -61,7 +61,7 @@
 -- (ver EmailsController.Send). Idempotente.
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'UserEmailConfigs')
 CREATE TABLE dbo.UserEmailConfigs (
-    UserId          NVARCHAR(450) NOT NULL PRIMARY KEY,
+    UserId          NVARCHAR(128) NOT NULL PRIMARY KEY,
     SmtpEnabled     BIT NULL,
     SmtpHost        NVARCHAR(200) NULL,
     SmtpPort        INT NULL,

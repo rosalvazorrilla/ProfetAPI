@@ -138,11 +138,17 @@ public class AccountEmailController : ControllerBase
         );
 
         var testTo = string.IsNullOrWhiteSpace(dto.TestTo) ? account.SmtpFromAddress! : dto.TestTo.Trim();
+        var logoUrl = (await _context.GlobalBranding.AsNoTracking().FirstOrDefaultAsync())?.LogoLargeUrl;
 
         var (success, error) = await _emailService.SendAsync(
             to:       testTo,
             subject:  "✅ Prueba de configuración — Profet CRM",
-            bodyHtml: $"<p>¡Funciona! Tu configuración SMTP está conectada correctamente.</p><p>Este correo fue enviado desde <strong>{account.SmtpFromAddress}</strong> a través de tu servidor SMTP configurado en Profet CRM.</p>",
+            bodyHtml: EmailTemplates.Wrap(
+                title: "¡Tu correo de cuenta está conectado!",
+                bodyHtml: $"<p>Esta cuenta ya puede enviar notificaciones desde <strong>{account.SmtpFromAddress}</strong> a través de tu servidor SMTP configurado.</p>",
+                badgeText: "Prueba exitosa",
+                logoUrl: logoUrl
+            ),
             config:   config
         );
 
