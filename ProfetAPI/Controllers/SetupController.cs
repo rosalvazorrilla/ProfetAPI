@@ -23,13 +23,22 @@ namespace ProfetAPI.Controllers
         private readonly ApplicationDbContext _context;
         private readonly UserManager<ApplicationUser> _userManager;
         private readonly IScoringAiService _scoringAi;
-        private readonly string _frontendLoginUrl = "http://localhost:3000/login";
+        private readonly ILogger<SetupController> _logger;
+        private readonly SecretProtector _secrets;
+        private readonly IEmailService _emailService;
+        private readonly string _frontendLoginUrl;
+        private readonly string _frontendBaseUrl;
 
-        public SetupController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, IScoringAiService scoringAi)
+        public SetupController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, IScoringAiService scoringAi, IConfiguration configuration, ILogger<SetupController> logger, SecretProtector secrets, IEmailService emailService)
         {
             _context = context;
             _userManager = userManager;
             _scoringAi = scoringAi;
+            _logger = logger;
+            _secrets = secrets;
+            _emailService = emailService;
+            _frontendBaseUrl = (configuration["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+            _frontendLoginUrl = _frontendBaseUrl + "/login";
         }
 
         // ════════════════════════════════════════════════════════════
@@ -51,6 +60,60 @@ namespace ProfetAPI.Controllers
         private async Task<bool> UserBelongsToCustomer(string userId, int customerId)
         {
             return await _context.Users.AnyAsync(u => u.Id == userId && u.CustomerId == customerId);
+        }
+
+        // ════════════════════════════════════════════════════════════
+        // CÓDIGO DE ACCESO — se pide una vez al entrar, antes de dejar editar nada
+        // ════════════════════════════════════════════════════════════
+
+        // POST /api/setup/verify-code?token=
+        [HttpPost("verify-code")]
+        [SwaggerOperation(Summary = "Verificar el código de acceso enviado por correo")]
+        [SwaggerResponse(200, "Resultado de la verificación")]
+        public async Task<IActionResult> VerifyAccessCode([FromQuery] string token, [FromBody] VerifyAccessCodeDto body)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+
+            // Clientes creados antes de este cambio no tienen código — no se les bloquea.
+            if (string.IsNullOrEmpty(customer.SetupAccessCode))
+                return Ok(new { valid = true });
+
+            var valid = customer.SetupAccessCode == body.Code?.Trim();
+            return Ok(new { valid });
+        }
+
+        // POST /api/setup/resend-code?token=
+        [HttpPost("resend-code")]
+        [SwaggerOperation(Summary = "Reenviar el código de acceso por correo")]
+        [SwaggerResponse(200, "Correo reenviado (si el cliente tiene email registrado)")]
+        public async Task<IActionResult> ResendAccessCode([FromQuery] string token)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+            if (string.IsNullOrEmpty(customer.SetupAccessCode) || string.IsNullOrWhiteSpace(customer.Email))
+                return Ok(new { sent = false });
+
+            try
+            {
+                var logoUrl = (await _context.GlobalBranding.AsNoTracking().FirstOrDefaultAsync())?.LogoLargeUrl;
+                await _emailService.SendAsync(
+                    to: customer.Email,
+                    subject: "Tu código de acceso a Profet",
+                    bodyHtml: EmailTemplates.Wrap(
+                        title: "Tu código de acceso",
+                        bodyHtml: $"<p style=\"font-size:24px;font-weight:700;letter-spacing:4px;\">{customer.SetupAccessCode}</p>",
+                        badgeText: "Configuración inicial",
+                        logoUrl: logoUrl
+                    )
+                );
+                return Ok(new { sent = true });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "No se pudo reenviar el código de acceso a {Email}", customer.Email);
+                return Ok(new { sent = false });
+            }
         }
 
         // ════════════════════════════════════════════════════════════
@@ -686,11 +749,20 @@ namespace ProfetAPI.Controllers
 
             var funnel = await _context.Funnels.Include(f => f.Stages)
                 .FirstOrDefaultAsync(f => f.AccountId == accountId);
-            if (funnel == null) return NotFound(new { message = "La cuenta no tiene embudo. Usa PUT /funnel primero." });
 
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
             {
+                // "Personalizado" en el wizard solo llena el estado local y llega directo aquí sin
+                // pasar por PUT /funnel — se crea el embudo en blanco en vez de exigir un paso previo.
+                if (funnel == null)
+                {
+                    funnel = new Funnel { AccountId = accountId, Name = "Embudo personalizado" };
+                    _context.Funnels.Add(funnel);
+                    await _context.SaveChangesAsync();
+                    funnel.Stages = new List<Stage>();
+                }
+
                 var incomingIds = model.Stages.Where(s => s.StageId.HasValue).Select(s => s.StageId!.Value).ToList();
 
                 // Eliminar las que no vienen
@@ -754,9 +826,10 @@ namespace ProfetAPI.Controllers
             if (!await AccountBelongsToCustomer(accountId, customer.Id))
                 return NotFound(new { message = "Cuenta no encontrada." });
 
-            // Pool global de variables (excluye campos de sistema)
+            // Pool de variables: sugerencias globales (OwnerCustomerId null) + las propias de este cliente.
+            // Los campos personalizados que crea OTRO cliente nunca deben aparecer aquí.
             var allFields = await _context.CustomFieldDefinitions
-                .Where(f => !f.IsSystem)
+                .Where(f => !f.IsSystem && (f.OwnerCustomerId == null || f.OwnerCustomerId == customer.Id))
                 .OrderBy(f => f.FieldName)
                 .ToListAsync();
 
@@ -803,7 +876,8 @@ namespace ProfetAPI.Controllers
                 FieldCode = fieldCode,
                 FieldName = model.FieldName.Trim(),
                 FieldType = model.FieldType ?? "text",
-                Options = model.Options
+                Options = model.Options,
+                OwnerCustomerId = customer.Id,
             };
             _context.CustomFieldDefinitions.Add(definition);
             await _context.SaveChangesAsync();
@@ -898,13 +972,26 @@ namespace ProfetAPI.Controllers
             if (!_scoringAi.IsConfigured) return StatusCode(503, new { message = "La IA no está configurada (falta Anthropic:ApiKey)." });
             if (string.IsNullOrWhiteSpace(body.Prompt)) return BadRequest(new { message = "Describe tu negocio en el prompt." });
 
-            var proposal = await _scoringAi.GenerateFromPromptAsync(new GenerateQuestionsRequestDto
+            try
             {
-                AccountId = accountId,
-                Prompt    = body.Prompt,
-                Industry  = body.Industry,
-            });
-            return Ok(proposal);
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+                var proposal = await _scoringAi.GenerateFromPromptAsync(new GenerateQuestionsRequestDto
+                {
+                    AccountId = accountId,
+                    Prompt    = body.Prompt,
+                    Industry  = body.Industry,
+                }, cts.Token);
+                return Ok(proposal);
+            }
+            catch (OperationCanceledException)
+            {
+                return StatusCode(504, new { message = "La IA tardó demasiado en responder. Intenta con una descripción más corta." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generando propuesta de scoring con IA para cuenta {AccountId}", accountId);
+                return StatusCode(502, new { message = "No se pudo generar la propuesta con IA. Intenta de nuevo en un momento." });
+            }
         }
 
         // POST /api/setup/accounts/{accountId}/scoring/ai-save?token=
@@ -1580,7 +1667,9 @@ namespace ProfetAPI.Controllers
                 UserId = user.Id,
                 FirstName = model.FirstName,
                 LastName = model.LastName,
-                Phone = model.Phone
+                Phone = model.Phone,
+                // Se manda por correo al Activar (F12) y se borra justo después de enviarla.
+                TempPasswordEncrypted = _secrets.Protect(model.Password),
             };
             _context.UserProfiles.Add(profile);
             await _context.SaveChangesAsync();
@@ -1794,8 +1883,14 @@ namespace ProfetAPI.Controllers
                 if (!await UserBelongsToCustomer(uid, customer.Id))
                     return BadRequest(new { message = $"El usuario {uid} no pertenece a este cliente." });
             }
-            if (model.LeaderId != null && !await UserBelongsToCustomer(model.LeaderId, customer.Id))
-                return BadRequest(new { message = "El líder indicado no pertenece a este cliente." });
+            if (model.LeaderId != null)
+            {
+                if (!await UserBelongsToCustomer(model.LeaderId, customer.Id))
+                    return BadRequest(new { message = "El líder indicado no pertenece a este cliente." });
+                var leaderUser = await _userManager.FindByIdAsync(model.LeaderId);
+                if (leaderUser == null || !await _userManager.IsInRoleAsync(leaderUser, "Manager"))
+                    return BadRequest(new { message = "El líder de equipo debe tener rol Gerente." });
+            }
 
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
@@ -1861,8 +1956,14 @@ namespace ProfetAPI.Controllers
                 if (!await UserBelongsToCustomer(uid, customer.Id))
                     return BadRequest(new { message = $"El usuario {uid} no pertenece a este cliente." });
             }
-            if (model.LeaderId != null && !await UserBelongsToCustomer(model.LeaderId, customer.Id))
-                return BadRequest(new { message = "El líder indicado no pertenece a este cliente." });
+            if (model.LeaderId != null)
+            {
+                if (!await UserBelongsToCustomer(model.LeaderId, customer.Id))
+                    return BadRequest(new { message = "El líder indicado no pertenece a este cliente." });
+                var leaderUser = await _userManager.FindByIdAsync(model.LeaderId);
+                if (leaderUser == null || !await _userManager.IsInRoleAsync(leaderUser, "Manager"))
+                    return BadRequest(new { message = "El líder de equipo debe tener rol Gerente." });
+            }
 
             using var transaction = await _context.Database.BeginTransactionAsync();
             try
@@ -2159,6 +2260,34 @@ namespace ProfetAPI.Controllers
 
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
+
+                // 4. Mandar por correo la contraseña temporal a cada usuario creado en el wizard
+                // (F12) — antes solo se mostraba en pantalla. Se borra justo después de enviarla.
+                var userIds = users.Select(u => u.Id).ToList();
+                var profilesWithPassword = await _context.UserProfiles
+                    .Where(p => userIds.Contains(p.UserId) && p.TempPasswordEncrypted != null)
+                    .ToListAsync();
+                var logoUrl = (await _context.GlobalBranding.AsNoTracking().FirstOrDefaultAsync())?.LogoLargeUrl;
+                foreach (var profile in profilesWithPassword)
+                {
+                    var u = users.First(x => x.Id == profile.UserId);
+                    var plainPassword = _secrets.Unprotect(profile.TempPasswordEncrypted);
+                    if (!string.IsNullOrEmpty(plainPassword) && !string.IsNullOrEmpty(u.Email))
+                    {
+                        var (success, _) = await _emailService.SendAsync(
+                            to: u.Email,
+                            subject: "Tu cuenta en Profet ya está lista",
+                            bodyHtml: EmailTemplates.Wrap(
+                                title: "¡Tu cuenta ya está activa!",
+                                bodyHtml: $"<p>Ya puedes iniciar sesión con:</p><p><strong>Usuario:</strong> {u.Email}<br/><strong>Contraseña temporal:</strong> {plainPassword}</p><p>Te recomendamos cambiarla en cuanto entres.</p><p><a href=\"{_frontendLoginUrl}\">Ir a iniciar sesión →</a></p>",
+                                badgeText: "Cuenta activada",
+                                logoUrl: logoUrl
+                            )
+                        );
+                        if (success) profile.TempPasswordEncrypted = null;
+                    }
+                }
+                await _context.SaveChangesAsync();
 
                 // Email del primer admin/accountadmin
                 var firstUser = await _context.Users

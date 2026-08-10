@@ -14,6 +14,11 @@ namespace ProfetAPI.Dtos
         public string? Industry { get; set; }
     }
 
+    public class VerifyAccessCodeDto
+    {
+        public string? Code { get; set; }
+    }
+
     // F6: playbook (secuencia de tareas) predeterminado, configurable en el wizard
     public class SetupPlaybookRequestDto
     {

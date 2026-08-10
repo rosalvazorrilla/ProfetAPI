@@ -28,6 +28,12 @@ namespace ProfetAPI.Models
         // Esta es la columna que guarda el JSON como texto plano en la DB
         public string? Preferences { get; set; }
 
+        /// <summary>
+        /// Contraseña temporal cifrada (SecretProtector) de un usuario creado en el wizard —
+        /// se manda por correo al Activar y se borra justo después de enviarla.
+        /// </summary>
+        public string? TempPasswordEncrypted { get; set; }
+
 
         // --- PROPIEDAD "AYUDANTE" (NO SE GUARDA EN LA DB) ---
         

@@ -205,6 +205,24 @@ _ = Task.Run(async () =>
 
 // --- 6. Pipeline HTTP ---
 
+// Red de seguridad: cualquier excepción no controlada (ej. la API de Anthropic falla o tarda)
+// regresa un JSON claro en vez de cortar la conexión — así el navegador nunca ve un
+// "Failed to fetch" sin explicación. Va primero para que la respuesta generada aquí
+// todavía pase por CORS (registrado más abajo).
+app.UseExceptionHandler(errApp =>
+{
+    errApp.Run(async context =>
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(feature?.Error, "Excepción no controlada en {Path}", context.Request.Path);
+
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { message = "Ocurrió un error inesperado en el servidor. Intenta de nuevo." });
+    });
+});
+
 // Mover Swagger FUERA del if(Development) para que se vea en Azure
 app.UseSwagger();
 app.UseSwaggerUI(c =>

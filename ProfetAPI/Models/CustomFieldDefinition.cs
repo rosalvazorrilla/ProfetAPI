@@ -29,4 +29,11 @@ public class CustomFieldDefinition
     /// </summary>
     [Column("IsSystem")]
     public bool IsSystem { get; set; } = false;
+
+    /// <summary>
+    /// null = sugerencia global (creada por AdminGlobal, visible para todos los clientes).
+    /// Con valor = campo personalizado creado por ESE cliente — solo él lo ve, no se comparte.
+    /// </summary>
+    [Column("OwnerCustomerId")]
+    public int? OwnerCustomerId { get; set; }
 }

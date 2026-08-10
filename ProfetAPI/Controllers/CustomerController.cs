@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProfetAPI.Data;
 using ProfetAPI.Dtos;
 using ProfetAPI.Models;
+using ProfetAPI.Services;
 using Swashbuckle.AspNetCore.Annotations;
 
 namespace ProfetAPI.Controllers
@@ -15,11 +16,16 @@ namespace ProfetAPI.Controllers
     public class CustomersController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
-        private readonly string _frontendBaseUrl = "http://localhost:3000";
+        private readonly IEmailService _emailService;
+        private readonly ILogger<CustomersController> _logger;
+        private readonly string _frontendBaseUrl;
 
-        public CustomersController(ApplicationDbContext context)
+        public CustomersController(ApplicationDbContext context, IConfiguration configuration, IEmailService emailService, ILogger<CustomersController> logger)
         {
             _context = context;
+            _emailService = emailService;
+            _logger = logger;
+            _frontendBaseUrl = (configuration["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
         }
 
         // ── GET api/customers ────────────────────────────────────────────────
@@ -37,7 +43,8 @@ namespace ProfetAPI.Controllers
                 .Select(c => new CustomerResponseDto(
                     c.Id, c.Name, c.Contact, c.Email, c.Status,
                     $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
-                    c.SetupToken
+                    c.SetupToken,
+                    null
                 ))
                 .ToListAsync();
 
@@ -57,7 +64,8 @@ namespace ProfetAPI.Controllers
                 .Select(c => new CustomerResponseDto(
                     c.Id, c.Name, c.Contact, c.Email, c.Status,
                     $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
-                    c.SetupToken
+                    c.SetupToken,
+                    null
                 ))
                 .FirstOrDefaultAsync();
 
@@ -126,6 +134,7 @@ namespace ProfetAPI.Controllers
                     Active = true,
                     Deleted = false,
                     SetupToken = Guid.NewGuid().ToString("N"),
+                    SetupAccessCode = Random.Shared.Next(0, 1_000_000).ToString("D6"),
                     SetupStep = 1,
                     Status = "Pendiente de Setup"
                 };
@@ -176,8 +185,33 @@ namespace ProfetAPI.Controllers
                 await transaction.CommitAsync();
 
                 var setupUrl = $"{_frontendBaseUrl}/setup?token={customer.SetupToken}";
+
+                if (!string.IsNullOrWhiteSpace(customer.Email))
+                {
+                    try
+                    {
+                        var logoUrl = (await _context.GlobalBranding.AsNoTracking().FirstOrDefaultAsync())?.LogoLargeUrl;
+                        await _emailService.SendAsync(
+                            to: customer.Email,
+                            subject: "Configura tu cuenta en Profet",
+                            bodyHtml: EmailTemplates.Wrap(
+                                title: $"¡Bienvenido, {customer.Name}!",
+                                bodyHtml: $"<p>Entra al siguiente link para configurar tu cuenta:</p><p><a href=\"{setupUrl}\">{setupUrl}</a></p><p>Te vamos a pedir este código de acceso antes de dejarte editar nada:</p><p style=\"font-size:24px;font-weight:700;letter-spacing:4px;\">{customer.SetupAccessCode}</p>",
+                                badgeText: "Configuración inicial",
+                                logoUrl: logoUrl
+                            )
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        // No bloquear la creación del cliente si falla el correo — el admin igual
+                        // tiene el link y el código en la pantalla de éxito para compartirlos manualmente.
+                        _logger.LogWarning(ex, "No se pudo enviar el correo de setup a {Email}", customer.Email);
+                    }
+                }
+
                 return CreatedAtAction(nameof(GetById), new { id = customer.Id },
-                    new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status, setupUrl, customer.SetupToken));
+                    new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status, setupUrl, customer.SetupToken, customer.SetupAccessCode));
             }
             catch (Exception ex)
             {

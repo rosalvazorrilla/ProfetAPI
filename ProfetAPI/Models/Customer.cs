@@ -30,6 +30,10 @@ public class Customer
     [Column("SetupToken")]
     public string? SetupToken { get; set; } // El token de la URL mágica
 
+    /// <summary>Código de 6 dígitos que se manda por correo — se pide una vez al entrar al wizard antes de dejar editar nada.</summary>
+    [Column("SetupAccessCode")]
+    public string? SetupAccessCode { get; set; }
+
     [Column("SetupStep")]
     public int SetupStep { get; set; } // Para saber en qué paso del Wizard se quedó
 

@@ -53,28 +53,22 @@
 --   GoogleAdsRefreshTokenEncrypted). EJECUTADA (confirmado por el usuario).
 --   Texto completo del DDL: ver historial de conversación / git blame de
 --   este archivo.
+-- 2026-08-04 — Correo de seguimiento por usuario: tabla dbo.UserEmailConfigs
+--   (UserId PK, campos Smtp* igual que Accounts). EJECUTADA (confirmado por
+--   el usuario). Texto completo: ver historial de conversación.
+-- 2026-08-06 — Aislar campos personalizados entre clientes: columna OwnerCustomerId
+--   en dbo.CustomFieldDefinitions (null = sugerencia global, con valor = privado de
+--   ese cliente) + reclasificación de datos existentes. EJECUTADA (confirmado por
+--   el usuario). Texto completo: ver historial de conversación.
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
--- 2026-08-04 — Correo de seguimiento por usuario: cada vendedor puede conectar su
--- propio SMTP para que las respuestas de sus prospectos le lleguen a él, en vez de
--- a un buzón compartido de la cuenta. Se prioriza sobre Accounts.Smtp* al enviar
--- (ver EmailsController.Send). Idempotente.
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'UserEmailConfigs')
-CREATE TABLE dbo.UserEmailConfigs (
-    UserId          NVARCHAR(128) NOT NULL PRIMARY KEY,
-    SmtpEnabled     BIT NULL,
-    SmtpHost        NVARCHAR(200) NULL,
-    SmtpPort        INT NULL,
-    SmtpUser        NVARCHAR(200) NULL,
-    SmtpPassword    NVARCHAR(500) NULL,
-    SmtpFromAddress NVARCHAR(200) NULL,
-    SmtpFromName    NVARCHAR(200) NULL,
-    SmtpEnableSsl   BIT NULL,
-    SmtpIsVerified  BIT NULL,
-    SmtpVerifiedAt  DATETIME2 NULL,
-    SmtpLastError   NVARCHAR(MAX) NULL,
-    CONSTRAINT FK_UserEmailConfigs_Users FOREIGN KEY (UserId) REFERENCES dbo.Users(Id) ON DELETE CASCADE
-);
+-- 2026-08-07 — Código de acceso del wizard + contraseña por correo al activar.
+-- Idempotente.
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Customers') AND name = 'SetupAccessCode')
+    ALTER TABLE dbo.Customers ADD SetupAccessCode NVARCHAR(10) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.UserProfiles') AND name = 'TempPasswordEncrypted')
+    ALTER TABLE dbo.UserProfiles ADD TempPasswordEncrypted NVARCHAR(500) NULL;
 GO
 
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
