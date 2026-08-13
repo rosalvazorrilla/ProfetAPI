@@ -17,10 +17,12 @@ namespace ProfetAPI.Controllers
     public class BrandingController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
+        private readonly IWebHostEnvironment _webHostEnvironment;
 
-        public BrandingController(ApplicationDbContext context)
+        public BrandingController(ApplicationDbContext context, IWebHostEnvironment webHostEnvironment)
         {
             _context = context;
+            _webHostEnvironment = webHostEnvironment;
         }
 
         // ── Helper — garantiza que siempre exista la fila única ──────────────
@@ -173,7 +175,7 @@ namespace ProfetAPI.Controllers
                 return BadRequest(new { message = "El parámetro 'type' debe ser: logo-large, logo-small o favicon." });
 
             var extension = Path.GetExtension(file.FileName).ToLower();
-            var folder = Path.Combine("wwwroot", "uploads", "branding", "global");
+            var folder = Path.Combine(_webHostEnvironment.WebRootPath, "uploads", "branding", "global");
             Directory.CreateDirectory(folder);
 
             var fileName = $"{type}{extension}";

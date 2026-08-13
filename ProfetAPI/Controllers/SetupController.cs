@@ -26,10 +26,11 @@ namespace ProfetAPI.Controllers
         private readonly ILogger<SetupController> _logger;
         private readonly SecretProtector _secrets;
         private readonly IEmailService _emailService;
+        private readonly IWebHostEnvironment _webHostEnvironment;
         private readonly string _frontendLoginUrl;
         private readonly string _frontendBaseUrl;
 
-        public SetupController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, IScoringAiService scoringAi, IConfiguration configuration, ILogger<SetupController> logger, SecretProtector secrets, IEmailService emailService)
+        public SetupController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, IScoringAiService scoringAi, IConfiguration configuration, ILogger<SetupController> logger, SecretProtector secrets, IEmailService emailService, IWebHostEnvironment webHostEnvironment)
         {
             _context = context;
             _userManager = userManager;
@@ -37,6 +38,7 @@ namespace ProfetAPI.Controllers
             _logger = logger;
             _secrets = secrets;
             _emailService = emailService;
+            _webHostEnvironment = webHostEnvironment;
             _frontendBaseUrl = (configuration["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
             _frontendLoginUrl = _frontendBaseUrl + "/login";
         }
@@ -2373,7 +2375,7 @@ namespace ProfetAPI.Controllers
 
             // Construir ruta de destino
             var extension = Path.GetExtension(file.FileName).ToLower();
-            var folder = Path.Combine("wwwroot", "uploads", "branding", customer.Id.ToString());
+            var folder = Path.Combine(_webHostEnvironment.WebRootPath, "uploads", "branding", customer.Id.ToString());
             Directory.CreateDirectory(folder);
 
             var fileName = $"{type}_{customer.Id}{extension}";

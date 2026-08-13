@@ -18,7 +18,7 @@ public class PlaybookTask
     /// <summary>Instrucciones para el vendedor (ej. "Llamar y confirmar presupuesto").</summary>
     public string? Description { get; set; }
 
-    [Column("\"Order\"")]
+    [Column("Order")]
     public int Order { get; set; }
 
     /// <summary>Prioridad heredada por la tarea generada: Alta / Media / Baja.</summary>
