@@ -225,7 +225,7 @@ namespace ProfetAPI.Controllers
                     Playbook = new SetupChecklistItem
                     {
                         Done = playbook != null && playbook.Tasks.Any(),
-                        Detail = playbook != null ? $"{playbook.Tasks.Count} tarea(s)" : "Sin playbook"
+                        Detail = playbook != null ? $"{playbook.Tasks.Count} tarea(s)" : "Sin secuencia"
                     }
                 };
             }).ToList();
