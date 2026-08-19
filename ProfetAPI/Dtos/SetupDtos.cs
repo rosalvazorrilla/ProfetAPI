@@ -24,6 +24,7 @@ namespace ProfetAPI.Dtos
     {
         public string  Name        { get; set; } = "";
         public string? Description { get; set; }
+        public string? GatingMode  { get; set; } = "Warn";   // "Block" | "Warn"
         public List<SetupPlaybookStepDto>? Tasks { get; set; }
     }
 
@@ -32,6 +33,7 @@ namespace ProfetAPI.Dtos
         public string? TaskName      { get; set; }
         public string? ActionType    { get; set; }
         public int?    TargetStageId { get; set; }
+        public int?    StageId       { get; set; }   // null = fase Lead; con valor = etapa del Deal
         public string? Description   { get; set; }
         public string? Priority      { get; set; }
         public int     OffsetDays    { get; set; }

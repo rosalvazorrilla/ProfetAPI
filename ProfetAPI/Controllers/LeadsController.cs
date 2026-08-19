@@ -1073,6 +1073,26 @@ public class LeadsController : ControllerBase
         return Ok(new { added = true });
     }
 
+    // GET /api/leads/{id}/pending-tasks — tareas de checklist abiertas (para el aviso antes de convertir)
+    [HttpGet("{id:long}/pending-tasks")]
+    [SwaggerOperation(Summary = "Tareas de la secuencia todavía abiertas para este prospecto")]
+    public async Task<IActionResult> GetPendingTasks(long id)
+    {
+        var lead = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
+            .FirstOrDefaultAsync();
+        if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
+        if (!lead.AccountId.HasValue) return Ok(new { gatingMode = "Warn", tasks = Array.Empty<object>() });
+
+        var gatingMode = await _playbooks.GetGatingModeAsync(lead.AccountId.Value);
+        var pending = await _playbooks.GetOpenGatingTasksAsync("Lead", id);
+        return Ok(new
+        {
+            gatingMode,
+            tasks = pending.Select(p => new { p.ActivityId, p.Subject, p.TaskStatus, p.DueDate }),
+        });
+    }
+
     // POST /api/leads/{id}/convert-to-deal  — convertir lead en oportunidad
     [HttpPost("{id:long}/convert-to-deal")]
     [SwaggerOperation(Summary = "Convertir prospecto en oportunidad (crea Contacto, Empresa y Deal)")]
@@ -1095,6 +1115,19 @@ public class LeadsController : ControllerBase
 
         if (!lead.AccountId.HasValue) return BadRequest(new { message = "El lead no tiene cuenta asignada." });
         var accountId = lead.AccountId.Value;
+
+        // ── Gating: si el playbook de la cuenta bloquea, no se puede convertir con tareas de Lead abiertas ──
+        var gatingMode = await _playbooks.GetGatingModeAsync(accountId);
+        if (gatingMode == "Block")
+        {
+            var pending = await _playbooks.GetOpenGatingTasksAsync("Lead", id);
+            if (pending.Count > 0)
+                return BadRequest(new
+                {
+                    message = "Tiene tareas pendientes de este prospecto. Complétalas antes de convertir a oportunidad.",
+                    pendingTasks = pending.Select(p => new { p.ActivityId, p.Subject, p.TaskStatus }),
+                });
+        }
 
         using var tx = await _context.Database.BeginTransactionAsync();
         try
@@ -1214,6 +1247,10 @@ public class LeadsController : ControllerBase
             };
             _context.Deals.Add(deal);
             await _context.SaveChangesAsync();
+
+            // ── 4b. Tareas de la etapa inicial del Deal (secuencia) ───────────────
+            if (firstStageId.HasValue)
+                await _playbooks.ApplyDealStageAsync(accountId, deal.DealId, firstStageId.Value, lead.OwnerUserId ?? CurrentUserId);
 
             // ── 5. DealUser (owner) ──────────────────────────────────────────────
             var ownerId = lead.OwnerUserId ?? CurrentUserId;

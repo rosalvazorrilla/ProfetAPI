@@ -17,6 +17,10 @@ public class ActivityPlaybook
 
     public bool Deleted { get; set; } = false;
 
+    /// <summary>"Block" = no deja convertir/avanzar de etapa si hay tareas pendientes.
+    /// "Warn" = deja pasar, pero el frontend advierte antes de confirmar.</summary>
+    public string GatingMode { get; set; } = "Warn";
+
     public virtual Account Account { get; set; } = null!;
     public virtual ICollection<PlaybookTask> Tasks { get; set; } = new List<PlaybookTask>();
 }

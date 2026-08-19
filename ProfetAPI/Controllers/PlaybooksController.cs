@@ -54,10 +54,10 @@ public class PlaybooksController : ControllerBase
             .OrderByDescending(p => p.IsDefault).ThenBy(p => p.Name)
             .Select(p => new
             {
-                p.PlaybookId, p.Name, p.Description, p.IsActive, p.IsDefault,
+                p.PlaybookId, p.Name, p.Description, p.IsActive, p.IsDefault, p.GatingMode,
                 tasks = p.Tasks.OrderBy(t => t.Order).Select(t => new
                 {
-                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId,
+                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId,
                     t.Description, t.Order, t.Priority, t.OffsetDays,
                 }),
             })
@@ -123,6 +123,7 @@ public class PlaybooksController : ControllerBase
             Description = req.Description?.Trim(),
             IsActive    = req.IsActive,
             IsDefault   = req.IsDefault,
+            GatingMode  = req.GatingMode == "Block" ? "Block" : "Warn",
             Deleted     = false,
         };
         _db.ActivityPlaybooks.Add(playbook);
@@ -158,6 +159,7 @@ public class PlaybooksController : ControllerBase
         playbook.Description = req.Description?.Trim();
         playbook.IsActive    = req.IsActive;
         playbook.IsDefault   = req.IsDefault;
+        playbook.GatingMode  = req.GatingMode == "Block" ? "Block" : "Warn";
 
         _db.PlaybookTasks.RemoveRange(playbook.Tasks);
         ApplySteps(playbook.PlaybookId, req.Tasks ?? []);
@@ -268,6 +270,7 @@ public class PlaybooksController : ControllerBase
                 TaskName      = (steps[i].TaskName ?? "").Trim(),
                 ActionType    = string.IsNullOrWhiteSpace(steps[i].ActionType) ? "Task" : steps[i].ActionType!,
                 TargetStageId = steps[i].TargetStageId,
+                StageId       = steps[i].StageId,
                 Description   = steps[i].Description?.Trim(),
                 Order         = i + 1,
                 Priority      = string.IsNullOrWhiteSpace(steps[i].Priority) ? "Media" : steps[i].Priority!,
@@ -278,10 +281,10 @@ public class PlaybooksController : ControllerBase
 
     private static object ToDto(ActivityPlaybook p) => new
     {
-        p.PlaybookId, p.Name, p.Description, p.IsActive, p.IsDefault,
+        p.PlaybookId, p.Name, p.Description, p.IsActive, p.IsDefault, p.GatingMode,
         tasks = p.Tasks.OrderBy(t => t.Order).Select(t => new
         {
-            t.TaskId, t.TaskName, t.ActionType, t.TargetStageId,
+            t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId,
             t.Description, t.Order, t.Priority, t.OffsetDays,
         }),
     };
@@ -295,6 +298,7 @@ public class SavePlaybookRequest
     public string? Description  { get; set; }
     public bool    IsActive     { get; set; } = true;
     public bool    IsDefault    { get; set; } = false;
+    public string? GatingMode   { get; set; } = "Warn";   // "Block" | "Warn"
     public List<PlaybookStepRequest>? Tasks { get; set; }
 }
 
@@ -303,6 +307,7 @@ public class PlaybookStepRequest
     public string? TaskName      { get; set; }
     public string? ActionType    { get; set; }
     public int?    TargetStageId { get; set; }
+    public int?    StageId       { get; set; }   // null = fase Lead; con valor = etapa del Deal
     public string? Description   { get; set; }
     public string? Priority      { get; set; }
     public int     OffsetDays    { get; set; }

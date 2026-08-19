@@ -50,6 +50,8 @@ public class TasksController : ControllerBase
         [FromQuery] string? search,
         [FromQuery] DateTime? dueDateFrom,
         [FromQuery] DateTime? dueDateTo,
+        [FromQuery] string? entityType,
+        [FromQuery] long? entityId,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25)
     {
@@ -58,6 +60,11 @@ public class TasksController : ControllerBase
 
         var q = _context.Activities
             .Where(a => a.ActivityType == "Task" && a.AccountId == resolvedAccountId);
+
+        if (!string.IsNullOrWhiteSpace(entityType))
+            q = q.Where(a => a.EntityType == entityType);
+        if (entityId.HasValue)
+            q = q.Where(a => a.EntityId == entityId.Value);
 
         if (!string.IsNullOrWhiteSpace(status))
             q = q.Where(a => a.TaskStatus == status);
@@ -103,6 +110,8 @@ public class TasksController : ControllerBase
                 a.CreatedOn,
                 a.EntityType,
                 a.EntityId,
+                a.StageId,
+                a.ResolutionNote,
                 OwnerUserId = a.OwnerUserId,
                 AssignedToUserId = a.AssignedToUserId,
                 AssignedToName = _context.UserProfiles
@@ -248,11 +257,15 @@ public class TasksController : ControllerBase
 
         if (task == null) return NotFound();
 
-        var valid = new[] { "Pendiente", "En progreso", "Completada", "Cancelada" };
+        var valid = new[] { "Pendiente", "En progreso", "Completada", "Cancelada", "Omitida" };
         if (!valid.Contains(dto.Status)) return BadRequest($"Estado inválido. Valores permitidos: {string.Join(", ", valid)}");
 
-        task.TaskStatus  = dto.Status;
-        task.IsCompleted = dto.Status == "Completada";
+        if (dto.Status == "Omitida" && string.IsNullOrWhiteSpace(dto.Note))
+            return BadRequest(new { message = "Explica brevemente por qué se omite esta tarea." });
+
+        task.TaskStatus     = dto.Status;
+        task.IsCompleted    = dto.Status == "Completada" || dto.Status == "Omitida";
+        task.ResolutionNote = dto.Status == "Omitida" ? dto.Note!.Trim() : task.ResolutionNote;
         await _context.SaveChangesAsync();
         return Ok(new { task.ActivityId, task.TaskStatus });
     }
@@ -298,5 +311,6 @@ public class TaskUpsertDto
 
 public class TaskStatusDto
 {
-    public string Status { get; set; } = "";
+    public string  Status { get; set; } = "";
+    public string? Note   { get; set; }
 }

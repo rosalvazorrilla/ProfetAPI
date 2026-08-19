@@ -21,15 +21,18 @@ public class DealsController : ControllerBase
     private readonly ApplicationDbContext _context;
     private readonly ProfetAPI.Services.AutomationExecutorService _automations;
     private readonly ProfetAPI.Services.ITimelineLogger _timeline;
+    private readonly ProfetAPI.Services.PlaybookService _playbooks;
 
     public DealsController(
         ApplicationDbContext context,
         ProfetAPI.Services.AutomationExecutorService automations,
-        ProfetAPI.Services.ITimelineLogger timeline)
+        ProfetAPI.Services.ITimelineLogger timeline,
+        ProfetAPI.Services.PlaybookService playbooks)
     {
         _context     = context;
         _automations = automations;
         _timeline    = timeline;
+        _playbooks   = playbooks;
     }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -410,6 +413,32 @@ public class DealsController : ControllerBase
         });
     }
 
+    // GET /api/deals/{id}/pending-tasks — tareas abiertas de la etapa actual (para el aviso antes de mover)
+    [HttpGet("{id}/pending-tasks")]
+    [SwaggerOperation(Summary = "Tareas de la secuencia todavía abiertas en la etapa actual de este deal")]
+    public async Task<IActionResult> GetPendingTasks(int id)
+    {
+        var deal = await _context.Deals.AsNoTracking().FirstOrDefaultAsync(d => d.DealId == id);
+        if (deal == null) return NotFound(new { message = "Deal no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == deal.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        if (!deal.StageId.HasValue) return Ok(new { gatingMode = "Warn", tasks = Array.Empty<object>() });
+
+        var gatingMode = await _playbooks.GetGatingModeAsync(deal.AccountId);
+        var pending = await _playbooks.GetOpenGatingTasksAsync("Deal", deal.DealId, deal.StageId.Value);
+        return Ok(new
+        {
+            gatingMode,
+            tasks = pending.Select(p => new { p.ActivityId, p.Subject, p.TaskStatus, p.DueDate }),
+        });
+    }
+
     // PATCH /api/deals/{id}/stage  — mover deal a otra etapa (drag & drop)
     [HttpPatch("{id}/stage")]
     [SwaggerOperation(Summary = "Mover deal a otra etapa")]
@@ -427,8 +456,29 @@ public class DealsController : ControllerBase
             if (!belongs) return Forbid();
         }
 
+        // ── Gating: si el playbook bloquea, no se puede salir de la etapa actual con tareas abiertas ──
+        var previousStageId = deal.StageId;
+        if (previousStageId.HasValue)
+        {
+            var gatingMode = await _playbooks.GetGatingModeAsync(deal.AccountId);
+            if (gatingMode == "Block")
+            {
+                var pending = await _playbooks.GetOpenGatingTasksAsync("Deal", deal.DealId, previousStageId.Value);
+                if (pending.Count > 0)
+                    return BadRequest(new
+                    {
+                        message = "Este deal tiene tareas pendientes de la etapa actual. Complétalas antes de avanzar.",
+                        pendingTasks = pending.Select(p => new { p.ActivityId, p.Subject, p.TaskStatus }),
+                    });
+            }
+        }
+
         deal.StageId = model.StageId;
         await _context.SaveChangesAsync();
+
+        // ── Tareas de la nueva etapa (secuencia) ──────────────────────────────
+        if (model.StageId.HasValue)
+            await _playbooks.ApplyDealStageAsync(deal.AccountId, deal.DealId, model.StageId.Value, CurrentUserId);
 
         // ── Disparar automatizaciones de oportunidad ──────────────────────────
         var stageName = model.StageId.HasValue

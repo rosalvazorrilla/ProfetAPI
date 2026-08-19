@@ -1381,10 +1381,10 @@ namespace ProfetAPI.Controllers
 
             return Ok(new
             {
-                playbook.PlaybookId, playbook.Name, playbook.Description, playbook.IsActive, playbook.IsDefault,
+                playbook.PlaybookId, playbook.Name, playbook.Description, playbook.IsActive, playbook.IsDefault, playbook.GatingMode,
                 tasks = playbook.Tasks.OrderBy(t => t.Order).Select(t => new
                 {
-                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.Description, t.Order, t.Priority, t.OffsetDays,
+                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId, t.Description, t.Order, t.Priority, t.OffsetDays,
                 }),
             });
         }
@@ -1418,6 +1418,8 @@ namespace ProfetAPI.Controllers
                 _context.PlaybookTasks.RemoveRange(playbook.Tasks);
             }
 
+            playbook.GatingMode = req.GatingMode == "Block" ? "Block" : "Warn";
+
             var steps = req.Tasks ?? new List<SetupPlaybookStepDto>();
             for (int i = 0; i < steps.Count; i++)
             {
@@ -1427,6 +1429,7 @@ namespace ProfetAPI.Controllers
                     TaskName      = (steps[i].TaskName ?? "").Trim(),
                     ActionType    = string.IsNullOrWhiteSpace(steps[i].ActionType) ? "Task" : steps[i].ActionType!,
                     TargetStageId = steps[i].TargetStageId,
+                    StageId       = steps[i].StageId,
                     Description   = steps[i].Description?.Trim(),
                     Order         = i + 1,
                     Priority      = string.IsNullOrWhiteSpace(steps[i].Priority) ? "Media" : steps[i].Priority!,
@@ -1439,10 +1442,10 @@ namespace ProfetAPI.Controllers
                 .FirstAsync(p => p.PlaybookId == playbook.PlaybookId);
             return Ok(new
             {
-                saved.PlaybookId, saved.Name, saved.Description, saved.IsActive, saved.IsDefault,
+                saved.PlaybookId, saved.Name, saved.Description, saved.IsActive, saved.IsDefault, saved.GatingMode,
                 tasks = saved.Tasks.OrderBy(t => t.Order).Select(t => new
                 {
-                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.Description, t.Order, t.Priority, t.OffsetDays,
+                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId, t.Description, t.Order, t.Priority, t.OffsetDays,
                 }),
             });
         }

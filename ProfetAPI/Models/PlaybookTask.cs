@@ -15,6 +15,10 @@ public class PlaybookTask
     /// <summary>Etapa destino cuando ActionType = "AdvanceStage" (recorrido lead → oportunidad).</summary>
     public int? TargetStageId { get; set; }
 
+    /// <summary>Null = paso de fase Lead (dispara al crear el lead, gatea la conversión a Deal).
+    /// Con valor = paso de esa etapa del Deal (dispara al entrar a la etapa, gatea salir de ella).</summary>
+    public int? StageId { get; set; }
+
     /// <summary>Instrucciones para el vendedor (ej. "Llamar y confirmar presupuesto").</summary>
     public string? Description { get; set; }
 
