@@ -60,6 +60,11 @@
 --   en dbo.CustomFieldDefinitions (null = sugerencia global, con valor = privado de
 --   ese cliente) + reclasificación de datos existentes. EJECUTADA (confirmado por
 --   el usuario). Texto completo: ver historial de conversación.
+-- 2026-08-18 — Secuencias con estado real: checklist de Lead + gating de etapas
+--   en Deal. StageId en dbo.PlaybookTasks, GatingMode en dbo.ActivityPlaybooks,
+--   SourcePlaybookTaskId/StageId/ResolutionNote en dbo.Activities. EJECUTADA
+--   (confirmado por el usuario, verificado con sys.columns). Texto completo del
+--   DDL: ver historial de conversación / git blame de este archivo.
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- 2026-08-07 — Código de acceso del wizard + contraseña por correo al activar.
@@ -69,31 +74,6 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Custom
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.UserProfiles') AND name = 'TempPasswordEncrypted')
     ALTER TABLE dbo.UserProfiles ADD TempPasswordEncrypted NVARCHAR(500) NULL;
-GO
-
--- 2026-08-18 — Secuencias con estado real: checklist de Lead + gating de etapas
--- en Deal. StageId en PlaybookTasks distingue paso de fase Lead (null) de paso
--- de una etapa de Deal (con valor). GatingMode en ActivityPlaybooks define si el
--- admin configuró bloquear o solo advertir cuando hay tareas abiertas. En
--- Activities: SourcePlaybookTaskId liga la tarea real al paso de plantilla que
--- la generó, StageId denormaliza a qué etapa pertenece (para el query de
--- gating sin join extra), ResolutionNote guarda el motivo cuando el estado es
--- "Omitida" (se resolvió distinto a como se definió, pero cuenta como cerrada
--- para efectos de gating). Idempotente.
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.PlaybookTasks') AND name = 'StageId')
-    ALTER TABLE dbo.PlaybookTasks ADD StageId INT NULL;
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ActivityPlaybooks') AND name = 'GatingMode')
-    ALTER TABLE dbo.ActivityPlaybooks ADD GatingMode NVARCHAR(20) NOT NULL DEFAULT 'Warn';
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'SourcePlaybookTaskId')
-    ALTER TABLE dbo.Activities ADD SourcePlaybookTaskId INT NULL;
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'StageId')
-    ALTER TABLE dbo.Activities ADD StageId INT NULL;
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Activities') AND name = 'ResolutionNote')
-    ALTER TABLE dbo.Activities ADD ResolutionNote NVARCHAR(500) NULL;
 GO
 
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
