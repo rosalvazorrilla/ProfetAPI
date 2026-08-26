@@ -1582,7 +1582,7 @@ namespace ProfetAPI.Controllers
 
         // PATCH /api/setup/accounts/{accountId}/catalogs/lost-reasons/{lostReasonId}?token=
         [HttpPatch("accounts/{accountId}/catalogs/lost-reasons/{lostReasonId}")]
-        [SwaggerOperation(Summary = "Cambiar si un motivo de pérdida ya guardado cuenta en gráficas/reportes")]
+        [SwaggerOperation(Summary = "Editar un motivo de pérdida ya guardado (texto y/o si cuenta en gráficas/reportes)")]
         [SwaggerResponse(200, "Actualizado")]
         [SwaggerResponse(404, "No encontrado")]
         public async Task<IActionResult> UpdateLostReasonChartFlag([FromQuery] string token, int accountId, int lostReasonId, [FromBody] SetupLostReasonPatchDto body)
@@ -1599,8 +1599,10 @@ namespace ProfetAPI.Controllers
             if (reason == null) return NotFound(new { message = "Motivo no encontrado." });
 
             reason.CountsForCharts = body.CountsForCharts;
+            if (!string.IsNullOrWhiteSpace(body.Description))
+                reason.Description = body.Description.Trim();
             await _context.SaveChangesAsync();
-            return Ok(new { reason.LostReasonId, reason.CountsForCharts });
+            return Ok(new { reason.LostReasonId, reason.CountsForCharts, reason.Description });
         }
 
         // DELETE /api/setup/accounts/{accountId}/catalogs/lost-reasons/{lostReasonId}?token=
