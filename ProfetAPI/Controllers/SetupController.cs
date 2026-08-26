@@ -1530,7 +1530,7 @@ namespace ProfetAPI.Controllers
 
                 // Insertar solo las que no existen ya en la cuenta
                 var existingDescriptions = (await _context.LeadLostReasons
-                    .Where(r => r.AccountId == accountId)
+                    .Where(r => r.AccountId == accountId && r.IsActive)
                     .Select(r => r.Description)
                     .ToListAsync())
                     .Select(d => d.ToLower())
@@ -1578,6 +1578,52 @@ namespace ProfetAPI.Controllers
                 await transaction.RollbackAsync();
                 return StatusCode(500, new { message = "Error al configurar catálogos.", details = ex.Message });
             }
+        }
+
+        // PATCH /api/setup/accounts/{accountId}/catalogs/lost-reasons/{lostReasonId}?token=
+        [HttpPatch("accounts/{accountId}/catalogs/lost-reasons/{lostReasonId}")]
+        [SwaggerOperation(Summary = "Cambiar si un motivo de pérdida ya guardado cuenta en gráficas/reportes")]
+        [SwaggerResponse(200, "Actualizado")]
+        [SwaggerResponse(404, "No encontrado")]
+        public async Task<IActionResult> UpdateLostReasonChartFlag([FromQuery] string token, int accountId, int lostReasonId, [FromBody] SetupLostReasonPatchDto body)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+
+            var account = await _context.Accounts.FindAsync(accountId);
+            if (account == null || account.CustomerId != customer.Id)
+                return NotFound(new { message = "Cuenta no encontrada." });
+
+            var reason = await _context.LeadLostReasons
+                .FirstOrDefaultAsync(r => r.LostReasonId == lostReasonId && r.AccountId == accountId);
+            if (reason == null) return NotFound(new { message = "Motivo no encontrado." });
+
+            reason.CountsForCharts = body.CountsForCharts;
+            await _context.SaveChangesAsync();
+            return Ok(new { reason.LostReasonId, reason.CountsForCharts });
+        }
+
+        // DELETE /api/setup/accounts/{accountId}/catalogs/lost-reasons/{lostReasonId}?token=
+        [HttpDelete("accounts/{accountId}/catalogs/lost-reasons/{lostReasonId}")]
+        [SwaggerOperation(Summary = "Quitar un motivo de pérdida de la cuenta")]
+        [SwaggerResponse(200, "Eliminado")]
+        [SwaggerResponse(404, "No encontrado")]
+        public async Task<IActionResult> DeleteLostReason([FromQuery] string token, int accountId, int lostReasonId)
+        {
+            var customer = await GetCustomerByToken(token);
+            if (customer == null) return Unauthorized(new { message = "Token inválido." });
+
+            var account = await _context.Accounts.FindAsync(accountId);
+            if (account == null || account.CustomerId != customer.Id)
+                return NotFound(new { message = "Cuenta no encontrada." });
+
+            var reason = await _context.LeadLostReasons
+                .FirstOrDefaultAsync(r => r.LostReasonId == lostReasonId && r.AccountId == accountId);
+            if (reason == null) return NotFound(new { message = "Motivo no encontrado." });
+
+            reason.IsActive = false;
+            await _context.SaveChangesAsync();
+            return Ok(new { deleted = true });
         }
 
         // ════════════════════════════════════════════════════════════

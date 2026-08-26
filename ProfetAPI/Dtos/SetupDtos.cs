@@ -455,6 +455,11 @@ namespace ProfetAPI.Dtos
         public List<SetupTagDto> Tags { get; set; } = new();
     }
 
+    public class SetupLostReasonPatchDto
+    {
+        public bool CountsForCharts { get; set; } = true;
+    }
+
     public class SetupTagDto
     {
         [Required]
