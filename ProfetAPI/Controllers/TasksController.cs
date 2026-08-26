@@ -14,8 +14,13 @@ namespace ProfetAPI.Controllers;
 public class TasksController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
+    private readonly ProfetAPI.Services.PlaybookService _playbooks;
 
-    public TasksController(ApplicationDbContext context) => _context = context;
+    public TasksController(ApplicationDbContext context, ProfetAPI.Services.PlaybookService playbooks)
+    {
+        _context   = context;
+        _playbooks = playbooks;
+    }
 
     private string? CurrentUserId   => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     private string? CurrentUserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
@@ -263,10 +268,18 @@ public class TasksController : ControllerBase
         if (dto.Status == "Omitida" && string.IsNullOrWhiteSpace(dto.Note))
             return BadRequest(new { message = "Explica brevemente por qué se omite esta tarea." });
 
+        var wasOpen = task.TaskStatus == "Pendiente" || task.TaskStatus == "En progreso";
+
         task.TaskStatus     = dto.Status;
         task.IsCompleted    = dto.Status == "Completada" || dto.Status == "Omitida";
         task.ResolutionNote = dto.Status == "Omitida" ? dto.Note!.Trim() : task.ResolutionNote;
         await _context.SaveChangesAsync();
+
+        // El plazo de la siguiente tarea de la secuencia arranca a contar desde ahora,
+        // no desde que se generaron todas juntas.
+        if (wasOpen && (dto.Status == "Completada" || dto.Status == "Omitida"))
+            await _playbooks.AdvanceNextDueDateAsync(task);
+
         return Ok(new { task.ActivityId, task.TaskStatus });
     }
 

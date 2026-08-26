@@ -73,6 +73,43 @@ public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> l
         return await query.AsNoTracking().ToListAsync();
     }
 
+    /// <summary>
+    /// Cuando se completa/omite una tarea generada por una secuencia, el plazo de la SIGUIENTE
+    /// tarea pendiente de esa misma secuencia (mismo lead/deal + etapa) arranca a contar desde
+    /// ahora, no desde que se generaron todas juntas — así una tarea atrasada no le come el
+    /// plazo a la que sigue.
+    /// </summary>
+    public async Task AdvanceNextDueDateAsync(Activity completedTask)
+    {
+        if (completedTask.SourcePlaybookTaskId == null || completedTask.EntityType == null || completedTask.EntityId == null)
+            return;
+
+        var currentStep = await db.PlaybookTasks.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TaskId == completedTask.SourcePlaybookTaskId.Value);
+        if (currentStep == null) return;
+
+        var openTasks = await db.Activities
+            .Where(a => a.ActivityType == "Task" && a.EntityType == completedTask.EntityType
+                     && a.EntityId == completedTask.EntityId && a.StageId == completedTask.StageId
+                     && OpenStatuses.Contains(a.TaskStatus) && a.SourcePlaybookTaskId != null)
+            .ToListAsync();
+        if (openTasks.Count == 0) return;
+
+        var stepIds = openTasks.Select(a => a.SourcePlaybookTaskId!.Value).ToList();
+        var stepInfo = await db.PlaybookTasks.AsNoTracking()
+            .Where(t => stepIds.Contains(t.TaskId))
+            .ToDictionaryAsync(t => t.TaskId, t => t);
+
+        var next = openTasks
+            .Where(a => stepInfo.TryGetValue(a.SourcePlaybookTaskId!.Value, out var s) && s.Order > currentStep.Order)
+            .OrderBy(a => stepInfo[a.SourcePlaybookTaskId!.Value].Order)
+            .FirstOrDefault();
+        if (next == null) return;
+
+        next.DueDate = DateTime.UtcNow.AddDays(Math.Max(0, stepInfo[next.SourcePlaybookTaskId!.Value].OffsetDays));
+        await db.SaveChangesAsync();
+    }
+
     /// <summary>Modo de gating ("Block"/"Warn") del playbook predeterminado de la cuenta. "Warn" si no hay uno.</summary>
     public async Task<string> GetGatingModeAsync(int accountId)
     {
@@ -100,8 +137,14 @@ public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> l
             : await db.Stages.Where(s => stageIds.Contains(s.StageId))
                              .ToDictionaryAsync(s => s.StageId, s => s.Name);
 
+        // El plazo de cada paso cuenta desde que termina el anterior, no desde un mismo
+        // punto de partida — si el paso 1 se atrasa, el reloj del paso 2 arranca cuando
+        // el 1 se completa (ver AdvanceNextDueDateAsync). Aquí, al generarse todas juntas,
+        // se calcula la estimación inicial acumulando los offsets en orden.
+        var cursor = now;
         foreach (var step in steps)
         {
+            cursor = cursor.AddDays(Math.Max(0, step.OffsetDays));
             db.Activities.Add(new Activity
             {
                 ActivityType         = "Task",
@@ -110,7 +153,7 @@ public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> l
                 Notes                = step.Description,
                 Priority             = string.IsNullOrWhiteSpace(step.Priority) ? "Media" : step.Priority,
                 TaskStatus           = "Pendiente",
-                DueDate              = now.AddDays(Math.Max(0, step.OffsetDays)),
+                DueDate              = cursor,
                 OwnerUserId          = ownerUserId,
                 AssignedToUserId     = ownerUserId,
                 EntityType           = entityType,
