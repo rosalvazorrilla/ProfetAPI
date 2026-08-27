@@ -76,6 +76,24 @@ IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.UserPr
     ALTER TABLE dbo.UserProfiles ADD TempPasswordEncrypted NVARCHAR(500) NULL;
 GO
 
+-- 2026-08-27 — Índices faltantes en tablas de Calificación (Scoring). Encontrados
+-- al diagnosticar que "Guardar calificación" se colgaba y tronaba por timeout —
+-- causa real: la base está en tier "Basic" (100% de I/O sostenido), pero estos
+-- índices reducen cuánto I/O necesita cada guardado (no resuelven el tier).
+-- Idempotente.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ScoringModels') AND name = 'IX_ScoringModels_AccountId')
+    CREATE INDEX IX_ScoringModels_AccountId ON dbo.ScoringModels(AccountId);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ScoringRules') AND name = 'IX_ScoringRules_ScoringModelId')
+    CREATE INDEX IX_ScoringRules_ScoringModelId ON dbo.ScoringRules(ScoringModelId);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ScoringRuleConditions') AND name = 'IX_ScoringRuleConditions_RuleId')
+    CREATE INDEX IX_ScoringRuleConditions_RuleId ON dbo.ScoringRuleConditions(RuleId);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.LeadTiers') AND name = 'IX_LeadTiers_ScoringModelId')
+    CREATE INDEX IX_LeadTiers_ScoringModelId ON dbo.LeadTiers(ScoringModelId);
+GO
+
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
 -- 32 tablas huérfanas en Profet_new SÍ tienen datos reales (nadie las lee hoy;
 -- LeadCalls/LeadFiles/Calls/AccountUsers/Webhooks ya se sacaron de esta
