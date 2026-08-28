@@ -436,6 +436,84 @@ public class AdminAccountsController : ControllerBase
     }
 
     // ════════════════════════════════════════════════════════════
+    // VARIABLES (CustomFieldDefinition / AccountCustomField)
+    // ════════════════════════════════════════════════════════════
+
+    // GET /api/admin/customers/{customerId}/accounts/{accountId}/variables
+    [HttpGet("{accountId}/variables")]
+    [SwaggerOperation(Summary = "Todas las variables disponibles para la cuenta, con su estado de activación")]
+    [SwaggerResponse(200, "Lista completa de variables")]
+    [SwaggerResponse(404, "Cuenta no encontrada")]
+    public async Task<IActionResult> GetVariables(int customerId, int accountId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        // Pool de variables: sugerencias globales (OwnerCustomerId null) + las propias de este cliente.
+        var allFields = await _context.CustomFieldDefinitions
+            .Where(f => !f.IsSystem && (f.OwnerCustomerId == null || f.OwnerCustomerId == customerId))
+            .OrderBy(f => f.FieldName)
+            .ToListAsync();
+
+        var activeMap = await _context.AccountCustomFields
+            .Where(acf => acf.AccountId == accountId)
+            .ToDictionaryAsync(acf => acf.FieldId);
+
+        var result = allFields.Select(f => new
+        {
+            f.FieldId,
+            f.FieldCode,
+            f.FieldName,
+            f.FieldType,
+            f.Options,
+            IsActive = activeMap.ContainsKey(f.FieldId),
+            IsVisibleOnCard = activeMap.TryGetValue(f.FieldId, out var acf) && acf.IsVisibleOnCard
+        });
+
+        return Ok(result);
+    }
+
+    // PUT /api/admin/customers/{customerId}/accounts/{accountId}/variables
+    [HttpPut("{accountId}/variables")]
+    [SwaggerOperation(Summary = "Configurar variables activas de la cuenta", Description = "Reemplaza las variables activas.")]
+    [SwaggerResponse(200, "Variables actualizadas")]
+    [SwaggerResponse(400, "Uno o más FieldId no existen en el catálogo")]
+    [SwaggerResponse(404, "Cuenta no encontrada")]
+    public async Task<IActionResult> SetVariables(int customerId, int accountId, [FromBody] SetAdminVariablesDto model)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var fieldIds = model.Fields.Select(f => f.FieldId).ToList();
+        if (fieldIds.Any())
+        {
+            var foundIds = await _context.CustomFieldDefinitions
+                .Where(cf => fieldIds.Contains(cf.FieldId))
+                .Select(cf => cf.FieldId)
+                .ToListAsync();
+            var missing = fieldIds.Except(foundIds).ToList();
+            if (missing.Any())
+                return BadRequest(new { message = $"FieldId(s) no encontrados en el catálogo: {string.Join(", ", missing)}" });
+        }
+
+        var existing = await _context.AccountCustomFields.Where(acf => acf.AccountId == accountId).ToListAsync();
+        _context.AccountCustomFields.RemoveRange(existing);
+
+        foreach (var f in model.Fields)
+        {
+            _context.AccountCustomFields.Add(new AccountCustomField
+            {
+                AccountId = accountId,
+                FieldId = f.FieldId,
+                IsVisibleOnCard = f.IsVisibleOnCard
+            });
+        }
+
+        await _context.SaveChangesAsync();
+        return Ok(new { message = $"{model.Fields.Count} variable(s) configurada(s)." });
+    }
+
+    // ════════════════════════════════════════════════════════════
     // INDUSTRIAS
     // ════════════════════════════════════════════════════════════
 
@@ -519,6 +597,95 @@ public class AdminAccountsController : ControllerBase
 
         await _context.SaveChangesAsync();
         return Ok(new { message = $"{templates.Count} motivo(s) configurado(s)." });
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // FUENTES DE PROSPECTOS
+    // ════════════════════════════════════════════════════════════
+
+    // GET /api/admin/customers/{customerId}/accounts/{accountId}/prospect-sources
+    [HttpGet("{accountId}/prospect-sources")]
+    [SwaggerOperation(Summary = "Obtener fuentes de prospectos asignadas a la cuenta")]
+    public async Task<IActionResult> GetProspectSources(int customerId, int accountId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var ids = await _context.AccountProspectSources
+            .Where(s => s.AccountId == accountId)
+            .Select(s => s.SourceId)
+            .ToListAsync();
+
+        return Ok(ids);
+    }
+
+    // PUT /api/admin/customers/{customerId}/accounts/{accountId}/prospect-sources
+    [HttpPut("{accountId}/prospect-sources")]
+    [SwaggerOperation(Summary = "Asignar fuentes de prospectos a la cuenta", Description = "Reemplaza las fuentes actuales.")]
+    public async Task<IActionResult> SetProspectSources(int customerId, int accountId, [FromBody] SetAdminProspectSourcesDto model)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var existing = await _context.AccountProspectSources.Where(s => s.AccountId == accountId).ToListAsync();
+        _context.AccountProspectSources.RemoveRange(existing);
+
+        foreach (var sourceId in model.SourceIds)
+            _context.AccountProspectSources.Add(new AccountProspectSource { AccountId = accountId, SourceId = sourceId });
+
+        await _context.SaveChangesAsync();
+        return Ok(new { message = $"{model.SourceIds.Count} fuente(s) asignada(s)." });
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // ETIQUETAS (Tags — por cliente, no por cuenta)
+    // ════════════════════════════════════════════════════════════
+
+    // GET /api/admin/customers/{customerId}/accounts/{accountId}/tags
+    [HttpGet("{accountId}/tags")]
+    [SwaggerOperation(Summary = "Etiquetas del cliente (las etiquetas son por cliente, no por cuenta)")]
+    public async Task<IActionResult> GetTags(int customerId, int accountId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var tags = await _context.Tags
+            .Where(t => t.CustomerId == customerId)
+            .Select(t => new { t.TagId, t.Name, t.Color, t.FontColor })
+            .ToListAsync();
+
+        return Ok(tags);
+    }
+
+    // POST /api/admin/customers/{customerId}/accounts/{accountId}/tags
+    [HttpPost("{accountId}/tags")]
+    [SwaggerOperation(Summary = "Crear una etiqueta para el cliente")]
+    public async Task<IActionResult> CreateTag(int customerId, int accountId, [FromBody] AdminTagDto model)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+        if (string.IsNullOrWhiteSpace(model.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
+
+        var exists = await _context.Tags.AnyAsync(t => t.CustomerId == customerId && t.Name == model.Name);
+        if (exists) return BadRequest(new { message = "Ya existe una etiqueta con ese nombre." });
+
+        var tag = new Tag { CustomerId = customerId, Name = model.Name, Color = model.Color, FontColor = model.FontColor };
+        _context.Tags.Add(tag);
+        await _context.SaveChangesAsync();
+        return Ok(new { tag.TagId, tag.Name, tag.Color, tag.FontColor });
+    }
+
+    // DELETE /api/admin/customers/{customerId}/accounts/{accountId}/tags/{tagId}
+    [HttpDelete("{accountId}/tags/{tagId}")]
+    [SwaggerOperation(Summary = "Eliminar una etiqueta del cliente")]
+    public async Task<IActionResult> DeleteTag(int customerId, int accountId, int tagId)
+    {
+        var tag = await _context.Tags.FirstOrDefaultAsync(t => t.TagId == tagId && t.CustomerId == customerId);
+        if (tag == null) return NotFound(new { message = "Etiqueta no encontrada." });
+
+        _context.Tags.Remove(tag);
+        await _context.SaveChangesAsync();
+        return NoContent();
     }
 
     // ════════════════════════════════════════════════════════════

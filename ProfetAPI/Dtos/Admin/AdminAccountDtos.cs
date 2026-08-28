@@ -152,6 +152,35 @@ public class SetAdminCatalogsDto
     public List<int> TemplateIds { get; set; } = new();
 }
 
+// ── Variables ─────────────────────────────────────────────────────────────────
+
+public class SetAdminVariablesDto
+{
+    public List<SetAdminVariableFieldDto> Fields { get; set; } = new();
+}
+
+public class SetAdminVariableFieldDto
+{
+    public int FieldId { get; set; }
+    public bool IsVisibleOnCard { get; set; }
+}
+
+// ── Fuentes de prospectos ────────────────────────────────────────────────────
+
+public class SetAdminProspectSourcesDto
+{
+    public List<int> SourceIds { get; set; } = new();
+}
+
+// ── Etiquetas ─────────────────────────────────────────────────────────────────
+
+public class AdminTagDto
+{
+    public string Name { get; set; } = null!;
+    public string? Color { get; set; }
+    public string? FontColor { get; set; }
+}
+
 // ── Users ─────────────────────────────────────────────────────────────────────
 
 public class AdminAccountUserResponseDto
