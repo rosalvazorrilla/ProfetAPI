@@ -2316,31 +2316,43 @@ namespace ProfetAPI.Controllers
 
                 // 4. Mandar por correo la contraseña temporal a cada usuario creado en el wizard
                 // (F12) — antes solo se mostraba en pantalla. Se borra justo después de enviarla.
-                var userIds = users.Select(u => u.Id).ToList();
-                var profilesWithPassword = await _context.UserProfiles
-                    .Where(p => userIds.Contains(p.UserId) && p.TempPasswordEncrypted != null)
-                    .ToListAsync();
-                var logoUrl = (await _context.GlobalBranding.AsNoTracking().FirstOrDefaultAsync())?.LogoLargeUrl;
-                foreach (var profile in profilesWithPassword)
+                // IMPORTANTE: esto va DESPUÉS del commit y en su propio try/catch — si el envío
+                // de correos falla (SMTP mal configurado, timeout, etc.) NO debe tumbar la
+                // activación que ya quedó guardada. Antes este bloque estaba antes del catch
+                // general, que intentaba un Rollback sobre una transacción ya comprometida y
+                // devolvía un 500 confuso aunque la cuenta sí se hubiera activado.
+                try
                 {
-                    var u = users.First(x => x.Id == profile.UserId);
-                    var plainPassword = _secrets.Unprotect(profile.TempPasswordEncrypted);
-                    if (!string.IsNullOrEmpty(plainPassword) && !string.IsNullOrEmpty(u.Email))
+                    var userIds = users.Select(u => u.Id).ToList();
+                    var profilesWithPassword = await _context.UserProfiles
+                        .Where(p => userIds.Contains(p.UserId) && p.TempPasswordEncrypted != null)
+                        .ToListAsync();
+                    var logoUrl = (await _context.GlobalBranding.AsNoTracking().FirstOrDefaultAsync())?.LogoLargeUrl;
+                    foreach (var profile in profilesWithPassword)
                     {
-                        var (success, _) = await _emailService.SendAsync(
-                            to: u.Email,
-                            subject: "Tu cuenta en Profet ya está lista",
-                            bodyHtml: EmailTemplates.Wrap(
-                                title: "¡Tu cuenta ya está activa!",
-                                bodyHtml: $"<p>Ya puedes iniciar sesión con:</p><p><strong>Usuario:</strong> {u.Email}<br/><strong>Contraseña temporal:</strong> {plainPassword}</p><p>Te recomendamos cambiarla en cuanto entres.</p><p><a href=\"{_frontendLoginUrl}\">Ir a iniciar sesión →</a></p>",
-                                badgeText: "Cuenta activada",
-                                logoUrl: logoUrl
-                            )
-                        );
-                        if (success) profile.TempPasswordEncrypted = null;
+                        var u = users.First(x => x.Id == profile.UserId);
+                        var plainPassword = _secrets.Unprotect(profile.TempPasswordEncrypted);
+                        if (!string.IsNullOrEmpty(plainPassword) && !string.IsNullOrEmpty(u.Email))
+                        {
+                            var (success, _) = await _emailService.SendAsync(
+                                to: u.Email,
+                                subject: "Tu cuenta en Profet ya está lista",
+                                bodyHtml: EmailTemplates.Wrap(
+                                    title: "¡Tu cuenta ya está activa!",
+                                    bodyHtml: $"<p>Ya puedes iniciar sesión con:</p><p><strong>Usuario:</strong> {u.Email}<br/><strong>Contraseña temporal:</strong> {plainPassword}</p><p>Te recomendamos cambiarla en cuanto entres.</p><p><a href=\"{_frontendLoginUrl}\">Ir a iniciar sesión →</a></p>",
+                                    badgeText: "Cuenta activada",
+                                    logoUrl: logoUrl
+                                )
+                            );
+                            if (success) profile.TempPasswordEncrypted = null;
+                        }
                     }
+                    await _context.SaveChangesAsync();
                 }
-                await _context.SaveChangesAsync();
+                catch (Exception exEmail)
+                {
+                    _logger.LogError(exEmail, "Error enviando contraseñas temporales tras activar el setup del cliente {CustomerId} — la activación ya quedó guardada.", customer.Id);
+                }
 
                 // Email del primer admin/accountadmin
                 var firstUser = await _context.Users

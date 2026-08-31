@@ -22,11 +22,35 @@ public class AdminAccountsController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly ProfetAPI.Services.SecretProtector _secrets;
 
-    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager)
+    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.SecretProtector secrets)
     {
         _context = context;
         _userManager = userManager;
+        _secrets = secrets;
+    }
+
+    /// <summary>Igual que el generador del wizard: garantiza mayúscula, minúscula, dígito y símbolo.</summary>
+    private static string GenerateTempPassword()
+    {
+        const string upper = "ABCDEFGHJKMNPQRSTUVWXYZ";
+        const string lower = "abcdefghjkmnpqrstuvwxyz";
+        const string digits = "23456789";
+        const string symbols = "!@#$%";
+        var all = upper + lower + digits + symbols;
+        var rnd = Random.Shared;
+        char Pick(string set) => set[rnd.Next(set.Length)];
+
+        var chars = new List<char> { Pick(upper), Pick(lower), Pick(digits), Pick(symbols) };
+        for (int i = 0; i < 8; i++) chars.Add(Pick(all));
+
+        for (int i = chars.Count - 1; i > 0; i--)
+        {
+            int j = rnd.Next(i + 1);
+            (chars[i], chars[j]) = (chars[j], chars[i]);
+        }
+        return new string(chars.ToArray());
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -749,6 +773,52 @@ public class AdminAccountsController : ControllerBase
         });
         await _context.SaveChangesAsync();
         return Ok(new { message = "Usuario asignado correctamente." });
+    }
+
+    // GET /api/admin/customers/{customerId}/accounts/{accountId}/users/{userId}/temp-password
+    [HttpGet("{accountId}/users/{userId}/temp-password")]
+    [SwaggerOperation(Summary = "Ver la contraseña temporal guardada del usuario, si todavía existe", Description = "Se borra automáticamente en cuanto se le manda por correo al activar el setup — si ya se envió (o nunca se guardó), no hay nada que mostrar.")]
+    public async Task<IActionResult> GetUserTempPassword(int customerId, int accountId, string userId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var profile = await _context.UserProfiles.Include(p => p.User)
+            .FirstOrDefaultAsync(p => p.UserId == userId && p.User.CustomerId == customerId);
+        if (profile == null) return NotFound(new { message = "Usuario no encontrado." });
+
+        var plain = _secrets.Unprotect(profile.TempPasswordEncrypted);
+        if (string.IsNullOrEmpty(plain)) return Ok(new { available = false });
+        return Ok(new { available = true, tempPassword = plain });
+    }
+
+    // POST /api/admin/customers/{customerId}/accounts/{accountId}/users/{userId}/reset-password
+    [HttpPost("{accountId}/users/{userId}/reset-password")]
+    [SwaggerOperation(Summary = "Genera una nueva contraseña temporal para el usuario", Description = "Útil cuando la anterior ya no está disponible (se envió por correo, o el correo nunca llegó). La devuelve en la respuesta y la guarda cifrada para poder verla después.")]
+    public async Task<IActionResult> ResetUserPassword(int customerId, int accountId, string userId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var user = await _context.Users.Include(u => u.UserProfile)
+            .FirstOrDefaultAsync(u => u.Id == userId && u.CustomerId == customerId && u.Deleted == false);
+        if (user == null) return NotFound(new { message = "Usuario no encontrado." });
+
+        var newPassword = GenerateTempPassword();
+        var resetToken = await _userManager.GeneratePasswordResetTokenAsync(user);
+        var result = await _userManager.ResetPasswordAsync(user, resetToken, newPassword);
+        if (!result.Succeeded)
+            return BadRequest(new { message = "No se pudo restablecer la contraseña.", errors = result.Errors.Select(e => e.Description) });
+
+        if (user.UserProfile == null)
+        {
+            user.UserProfile = new UserProfile { UserId = user.Id };
+            _context.UserProfiles.Add(user.UserProfile);
+        }
+        user.UserProfile.TempPasswordEncrypted = _secrets.Protect(newPassword);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { userId = user.Id, email = user.Email, tempPassword = newPassword });
     }
 
     // DELETE /api/admin/customers/{customerId}/accounts/{accountId}/users/{userId}
