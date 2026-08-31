@@ -70,6 +70,14 @@ public class EmailService : IEmailService
             msg.To.Add(MailboxAddress.Parse(to));
             if (!string.IsNullOrWhiteSpace(cc))      msg.Cc.Add(MailboxAddress.Parse(cc));
             if (!string.IsNullOrWhiteSpace(replyTo)) msg.ReplyTo.Add(MailboxAddress.Parse(replyTo));
+
+            // BCC solo en correos que salen de la config global de Profet (no en los de una
+            // cuenta con su propio SMTP configurado — esos son de ellos, no nuestros).
+            if (!cfg.IsCustom)
+            {
+                var bcc = _config["Email:BccAddress"];
+                if (!string.IsNullOrWhiteSpace(bcc)) msg.Bcc.Add(MailboxAddress.Parse(bcc));
+            }
             msg.Subject = subject;
             msg.Body = new BodyBuilder { HtmlBody = bodyHtml }.ToMessageBody();
 
