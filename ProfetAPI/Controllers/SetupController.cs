@@ -29,6 +29,7 @@ namespace ProfetAPI.Controllers
         private readonly IWebHostEnvironment _webHostEnvironment;
         private readonly string _frontendLoginUrl;
         private readonly string _frontendBaseUrl;
+        private readonly string? _apiBaseUrl;
 
         public SetupController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, IScoringAiService scoringAi, IConfiguration configuration, ILogger<SetupController> logger, SecretProtector secrets, IEmailService emailService, IWebHostEnvironment webHostEnvironment)
         {
@@ -41,6 +42,11 @@ namespace ProfetAPI.Controllers
             _webHostEnvironment = webHostEnvironment;
             _frontendBaseUrl = (configuration["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
             _frontendLoginUrl = _frontendBaseUrl + "/login";
+            // Base fija para URLs públicas de archivos subidos (logos, favicon). NO usar
+            // Request.Host aquí: si en algún momento el request llega por un alias/slot/dominio
+            // distinto al canónico (como pasó con "profet-prueba.azurewebsites.net"), esa URL
+            // queda grabada PERMANENTEMENTE en la base y el logo se rompe para siempre.
+            _apiBaseUrl = configuration["Api:BaseUrl"]?.TrimEnd('/');
         }
 
         // ════════════════════════════════════════════════════════════
@@ -2451,8 +2457,10 @@ namespace ProfetAPI.Controllers
             using (var stream = new FileStream(filePath, FileMode.Create))
                 await file.CopyToAsync(stream);
 
-            // Construir URL pública
-            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+            // Construir URL pública — usar la base fija de config, NO Request.Host (ver comentario
+            // en el constructor). Fallback a Request.Host solo si no hay Api:BaseUrl configurado
+            // (p.ej. en local dev).
+            var baseUrl = _apiBaseUrl ?? $"{Request.Scheme}://{Request.Host}";
             var publicUrl = $"{baseUrl}/uploads/branding/{customer.Id}/{fileName}";
 
             return Ok(new { url = publicUrl, type });

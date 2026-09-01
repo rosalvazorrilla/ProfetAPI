@@ -18,11 +18,15 @@ namespace ProfetAPI.Controllers
     {
         private readonly ApplicationDbContext _context;
         private readonly IWebHostEnvironment _webHostEnvironment;
+        private readonly string? _apiBaseUrl;
 
-        public BrandingController(ApplicationDbContext context, IWebHostEnvironment webHostEnvironment)
+        public BrandingController(ApplicationDbContext context, IWebHostEnvironment webHostEnvironment, IConfiguration configuration)
         {
             _context = context;
             _webHostEnvironment = webHostEnvironment;
+            // Base fija, NO Request.Host — si el request llega por un alias/dominio distinto al
+            // canónico esa URL queda grabada permanentemente en la base y el logo se rompe.
+            _apiBaseUrl = configuration["Api:BaseUrl"]?.TrimEnd('/');
         }
 
         // ── Helper — garantiza que siempre exista la fila única ──────────────
@@ -184,7 +188,7 @@ namespace ProfetAPI.Controllers
             using (var stream = new FileStream(filePath, FileMode.Create))
                 await file.CopyToAsync(stream);
 
-            var baseUrl = $"{Request.Scheme}://{Request.Host}";
+            var baseUrl = _apiBaseUrl ?? $"{Request.Scheme}://{Request.Host}";
             var publicUrl = $"{baseUrl}/uploads/branding/global/{fileName}";
 
             // Actualizar la fila automáticamente
