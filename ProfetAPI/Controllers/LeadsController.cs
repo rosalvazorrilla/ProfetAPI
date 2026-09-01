@@ -668,6 +668,49 @@ public class LeadsController : ControllerBase
         });
     }
 
+    // PATCH /api/leads/{id}  — actualizar datos del prospecto (solo se pisan los campos enviados)
+    [HttpPatch("{id:long}")]
+    [SwaggerOperation(Summary = "Actualizar datos de un prospecto", Description = "Actualización parcial: solo se modifican los campos incluidos en el body. Para cambiar el estatus del pipeline usar PATCH /api/leads/{id}/status.")]
+    [SwaggerResponse(200, "Actualizado")]
+    [SwaggerResponse(404, "No encontrado")]
+    public async Task<IActionResult> UpdateLead(long id, [FromBody] UpdateLeadDto model)
+    {
+        var lead = await _context.Leads.FindAsync(id);
+        if (lead == null || lead.Deleted == true) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        lead.Name           = model.Name           ?? lead.Name;
+        lead.Email          = model.Email           ?? lead.Email;
+        lead.Phone          = model.Phone           ?? lead.Phone;
+        lead.Company        = model.Company         ?? lead.Company;
+        lead.Position       = model.Position        ?? lead.Position;
+        lead.City           = model.City            ?? lead.City;
+        lead.ProspectSource = model.ProspectSource  ?? lead.ProspectSource;
+        lead.InitialMessage = model.InitialMessage  ?? lead.InitialMessage;
+
+        await _context.SaveChangesAsync();
+
+        if (lead.AccountId is int updAccId2)
+            _ = Task.Run(() => _automations.FireAsync(updAccId2, "LeadUpdated", new Dictionary<string, string>
+            {
+                ["_leadId"]       = lead.LeadId.ToString(),
+                ["name"]          = lead.Name          ?? "",
+                ["email"]         = lead.Email         ?? "",
+                ["phone"]         = lead.Phone         ?? "",
+                ["company"]       = lead.Company       ?? "",
+                ["prospectSource"]= lead.ProspectSource?? "",
+                ["status"]        = lead.Status,
+            }));
+
+        return Ok(new { leadId = lead.LeadId, updated = true });
+    }
+
     // PATCH /api/leads/{id}/status  — actualizar estatus
     [HttpPatch("{id:long}/status")]
     [SwaggerOperation(Summary = "Actualizar estatus del prospecto")]
@@ -1349,6 +1392,18 @@ public class CreateLeadDto
     public string? ProspectSource { get; set; }
     public string? InitialMessage { get; set; }
     public string? OwnerId     { get; set; }
+}
+
+public class UpdateLeadDto
+{
+    public string? Name        { get; set; }
+    public string? Email       { get; set; }
+    public string? Phone       { get; set; }
+    public string? Company     { get; set; }
+    public string? Position    { get; set; }
+    public string? City        { get; set; }
+    public string? ProspectSource { get; set; }
+    public string? InitialMessage { get; set; }
 }
 
 public class UpdateLeadStatusDto
