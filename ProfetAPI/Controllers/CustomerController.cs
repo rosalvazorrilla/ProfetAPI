@@ -11,21 +11,38 @@ namespace ProfetAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "AdminGlobal")]
+    [Authorize(Roles = "AdminGlobal,PM")]
     [SwaggerTag("Gestión de Clientes (Admin Global)")]
     public class CustomersController : ControllerBase
     {
         private readonly ApplicationDbContext _context;
         private readonly IEmailService _emailService;
         private readonly ILogger<CustomersController> _logger;
+        private readonly ProfetAPI.Services.PmScopeService _pmScope;
         private readonly string _frontendBaseUrl;
 
-        public CustomersController(ApplicationDbContext context, IConfiguration configuration, IEmailService emailService, ILogger<CustomersController> logger)
+        public CustomersController(ApplicationDbContext context, IConfiguration configuration, IEmailService emailService, ILogger<CustomersController> logger, ProfetAPI.Services.PmScopeService pmScope)
         {
             _context = context;
             _emailService = emailService;
             _logger = logger;
+            _pmScope = pmScope;
             _frontendBaseUrl = (configuration["Frontend:BaseUrl"] ?? "http://localhost:3000").TrimEnd('/');
+        }
+
+        /// <summary>Nombre + IDs de los PM asignados a un cliente, para mostrar "de quién es".</summary>
+        private async Task<List<PmSummaryDto>> GetPmsForCustomerAsync(int customerId)
+        {
+            var pmIds = await _context.PmCustomerAssignments
+                .Where(a => a.CustomerId == customerId)
+                .Select(a => a.PmUserId)
+                .ToListAsync();
+            if (pmIds.Count == 0) return new List<PmSummaryDto>();
+
+            return await _context.Users.Include(u => u.UserProfile)
+                .Where(u => pmIds.Contains(u.Id))
+                .Select(u => new PmSummaryDto(u.Id, ($"{u.UserProfile!.FirstName} {u.UserProfile.LastName}").Trim()))
+                .ToListAsync();
         }
 
         // ── GET api/customers ────────────────────────────────────────────────
@@ -38,12 +55,17 @@ namespace ProfetAPI.Controllers
         [SwaggerResponse(200, "Lista de clientes", typeof(List<CustomerResponseDto>))]
         public async Task<IActionResult> GetAll()
         {
-            var customers = await _context.Customers
-                .Where(c => c.Deleted == false)
+            var accessibleIds = await _pmScope.GetAccessibleCustomerIdsAsync(User);
+
+            var query = _context.Customers.Where(c => c.Deleted == false);
+            if (accessibleIds != null) query = query.Where(c => accessibleIds.Contains(c.Id));
+
+            var customers = await query
                 .Select(c => new CustomerResponseDto(
                     c.Id, c.Name, c.Contact, c.Email, c.Status,
                     $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
                     c.SetupToken,
+                    null,
                     null
                 ))
                 .ToListAsync();
@@ -59,12 +81,16 @@ namespace ProfetAPI.Controllers
         [SwaggerResponse(404, "No encontrado")]
         public async Task<IActionResult> GetById(int id)
         {
+            if (!await _pmScope.CanAccessCustomerAsync(User, id))
+                return NotFound(new { message = "El cliente no existe o fue eliminado." });
+
             var customer = await _context.Customers
                 .Where(c => c.Id == id && c.Deleted == false)
                 .Select(c => new CustomerResponseDto(
                     c.Id, c.Name, c.Contact, c.Email, c.Status,
                     $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
                     c.SetupToken,
+                    null,
                     null
                 ))
                 .FirstOrDefaultAsync();
@@ -72,7 +98,8 @@ namespace ProfetAPI.Controllers
             if (customer == null)
                 return NotFound(new { message = "El cliente no existe o fue eliminado." });
 
-            return Ok(customer);
+            var pms = await GetPmsForCustomerAsync(id);
+            return Ok(customer with { Pms = pms });
         }
 
         // ── POST api/customers ───────────────────────────────────────────────
@@ -85,6 +112,7 @@ namespace ProfetAPI.Controllers
         [SwaggerResponse(201, "Cliente creado", typeof(CustomerResponseDto))]
         [SwaggerResponse(400, "Datos inválidos")]
         [SwaggerResponse(404, "Plan o AddOn no encontrado")]
+        [Authorize(Roles = "AdminGlobal")] // un PM no da de alta clientes nuevos
         public async Task<IActionResult> Create([FromBody] CreateCustomerDto model)
         {
             if (!ModelState.IsValid)
@@ -181,6 +209,16 @@ namespace ProfetAPI.Controllers
                     });
                 }
 
+                // 5. Asignar PM(s) al cliente, si se indicaron
+                foreach (var pmUserId in model.PmUserIds ?? new List<string>())
+                {
+                    _context.PmCustomerAssignments.Add(new PmCustomerAssignment
+                    {
+                        PmUserId = pmUserId,
+                        CustomerId = customer.Id
+                    });
+                }
+
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
@@ -210,14 +248,47 @@ namespace ProfetAPI.Controllers
                     }
                 }
 
+                var pms = await GetPmsForCustomerAsync(customer.Id);
                 return CreatedAtAction(nameof(GetById), new { id = customer.Id },
-                    new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status, setupUrl, customer.SetupToken, customer.SetupAccessCode));
+                    new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status, setupUrl, customer.SetupToken, customer.SetupAccessCode, pms));
             }
             catch (Exception ex)
             {
                 await transaction.RollbackAsync();
                 return StatusCode(500, new { message = "Error al crear el cliente.", details = ex.Message });
             }
+        }
+
+        // ── GET/PUT api/customers/5/pms — asignación de PMs ─────────────────
+
+        [HttpGet("{id}/pms")]
+        [SwaggerOperation(Summary = "Ver los PM asignados a este cliente")]
+        [SwaggerResponse(200, "Lista de PMs asignados", typeof(List<PmSummaryDto>))]
+        public async Task<IActionResult> GetPms(int id)
+        {
+            if (!await _pmScope.CanAccessCustomerAsync(User, id))
+                return NotFound(new { message = "El cliente no existe o fue eliminado." });
+
+            return Ok(await GetPmsForCustomerAsync(id));
+        }
+
+        [HttpPut("{id}/pms")]
+        [Authorize(Roles = "AdminGlobal")] // solo AdminGlobal reasigna PMs
+        [SwaggerOperation(Summary = "Reemplazar los PM asignados a este cliente")]
+        [SwaggerResponse(200, "PMs actualizados")]
+        public async Task<IActionResult> SetPms(int id, [FromBody] SetCustomerPmsDto model)
+        {
+            var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
+            if (customer == null) return NotFound(new { message = "Cliente no encontrado." });
+
+            var existing = await _context.PmCustomerAssignments.Where(a => a.CustomerId == id).ToListAsync();
+            _context.PmCustomerAssignments.RemoveRange(existing);
+
+            foreach (var pmUserId in model.PmUserIds.Distinct())
+                _context.PmCustomerAssignments.Add(new PmCustomerAssignment { PmUserId = pmUserId, CustomerId = id });
+
+            await _context.SaveChangesAsync();
+            return Ok(await GetPmsForCustomerAsync(id));
         }
 
         // ── DELETE api/customers/5 ──────────────────────────────────────────
@@ -229,6 +300,7 @@ namespace ProfetAPI.Controllers
         )]
         [SwaggerResponse(200, "Cliente eliminado")]
         [SwaggerResponse(404, "No encontrado")]
+        [Authorize(Roles = "AdminGlobal")] // un PM no elimina clientes
         public async Task<IActionResult> Delete(int id)
         {
             var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
@@ -254,6 +326,8 @@ namespace ProfetAPI.Controllers
         {
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
+            if (!await _pmScope.CanAccessCustomerAsync(User, id))
+                return NotFound(new { message = "El cliente no existe o fue eliminado." });
 
             var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
             if (customer == null)
@@ -265,7 +339,7 @@ namespace ProfetAPI.Controllers
             await _context.SaveChangesAsync();
 
             return Ok(new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status,
-                $"{_frontendBaseUrl}/setup?token={customer.SetupToken}", customer.SetupToken));
+                $"{_frontendBaseUrl}/setup?token={customer.SetupToken}", customer.SetupToken, null, null));
         }
 
         // ── GET api/customers/5/subscription ────────────────────────────────

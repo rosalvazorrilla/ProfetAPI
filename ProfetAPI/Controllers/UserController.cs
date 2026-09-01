@@ -198,6 +198,52 @@ namespace ProfetAPI.Controllers
             });
         }
 
+        // GET: api/users/{id}/customers — clientes asignados a este PM
+        [HttpGet("{id}/customers")]
+        [Authorize(Roles = "AdminGlobal")]
+        [SwaggerOperation(Summary = "Clientes asignados a un usuario PM")]
+        [SwaggerResponse(200, "Lista de clientes asignados")]
+        public async Task<IActionResult> GetAssignedCustomers(string id)
+        {
+            var customerIds = await _context.PmCustomerAssignments
+                .Where(a => a.PmUserId == id)
+                .Select(a => a.CustomerId)
+                .ToListAsync();
+
+            var customers = await _context.Customers
+                .Where(c => customerIds.Contains(c.Id) && c.Deleted == false)
+                .Select(c => new { c.Id, c.Name })
+                .ToListAsync();
+
+            return Ok(customers);
+        }
+
+        // PUT: api/users/{id}/customers — reemplaza los clientes asignados a este PM
+        [HttpPut("{id}/customers")]
+        [Authorize(Roles = "AdminGlobal")]
+        [SwaggerOperation(Summary = "Asignar clientes a un usuario PM", Description = "Reemplaza la asignación completa.")]
+        [SwaggerResponse(200, "Clientes asignados")]
+        [SwaggerResponse(404, "Usuario no encontrado")]
+        public async Task<IActionResult> SetAssignedCustomers(string id, [FromBody] SetPmCustomersDto model)
+        {
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id && u.Deleted == false);
+            if (user == null) return NotFound(new { message = "Usuario no encontrado." });
+
+            var existing = await _context.PmCustomerAssignments.Where(a => a.PmUserId == id).ToListAsync();
+            _context.PmCustomerAssignments.RemoveRange(existing);
+
+            foreach (var customerId in model.CustomerIds.Distinct())
+                _context.PmCustomerAssignments.Add(new PmCustomerAssignment { PmUserId = id, CustomerId = customerId });
+
+            await _context.SaveChangesAsync();
+
+            var customers = await _context.Customers
+                .Where(c => model.CustomerIds.Contains(c.Id) && c.Deleted == false)
+                .Select(c => new { c.Id, c.Name })
+                .ToListAsync();
+            return Ok(customers);
+        }
+
         // DELETE: api/users/{id}
         [HttpDelete("{id}")]
         [Authorize(Roles = "AdminGlobal")]

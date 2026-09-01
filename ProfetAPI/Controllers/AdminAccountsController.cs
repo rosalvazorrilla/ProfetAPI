@@ -16,19 +16,21 @@ namespace ProfetAPI.Controllers;
 /// </summary>
 [Route("api/admin/customers/{customerId}/accounts")]
 [ApiController]
-[Authorize(Roles = "AdminGlobal")]
+[Authorize(Roles = "AdminGlobal,PM")]
 [SwaggerTag("Admin Global — Cuentas de Clientes")]
 public class AdminAccountsController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ProfetAPI.Services.SecretProtector _secrets;
+    private readonly ProfetAPI.Services.PmScopeService _pmScope;
 
-    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.SecretProtector secrets)
+    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.SecretProtector secrets, ProfetAPI.Services.PmScopeService pmScope)
     {
         _context = context;
         _userManager = userManager;
         _secrets = secrets;
+        _pmScope = pmScope;
     }
 
     /// <summary>Igual que el generador del wizard: garantiza mayúscula, minúscula, dígito y símbolo.</summary>
@@ -55,11 +57,17 @@ public class AdminAccountsController : ControllerBase
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<bool> CustomerExists(int customerId) =>
-        await _context.Customers.AnyAsync(c => c.Id == customerId && c.Deleted == false);
+    private async Task<bool> CustomerExists(int customerId)
+    {
+        if (!await _pmScope.CanAccessCustomerAsync(User, customerId)) return false;
+        return await _context.Customers.AnyAsync(c => c.Id == customerId && c.Deleted == false);
+    }
 
-    private async Task<Account?> GetAccount(int customerId, int accountId) =>
-        await _context.Accounts.FirstOrDefaultAsync(a => a.AccountId == accountId && a.CustomerId == customerId);
+    private async Task<Account?> GetAccount(int customerId, int accountId)
+    {
+        if (!await _pmScope.CanAccessCustomerAsync(User, customerId)) return null;
+        return await _context.Accounts.FirstOrDefaultAsync(a => a.AccountId == accountId && a.CustomerId == customerId);
+    }
 
     private static AdminAccountResponseDto MapAccount(Account a) => new()
     {
@@ -704,6 +712,9 @@ public class AdminAccountsController : ControllerBase
     [SwaggerOperation(Summary = "Eliminar una etiqueta del cliente")]
     public async Task<IActionResult> DeleteTag(int customerId, int accountId, int tagId)
     {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
         var tag = await _context.Tags.FirstOrDefaultAsync(t => t.TagId == tagId && t.CustomerId == customerId);
         if (tag == null) return NotFound(new { message = "Etiqueta no encontrada." });
 

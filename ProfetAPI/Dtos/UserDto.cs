@@ -27,4 +27,9 @@ namespace ProfetAPI.Dtos
         public string? LastName { get; set; }
         public string? Phone { get; set; }
     }
+
+    public class SetPmCustomersDto
+    {
+        public List<int> CustomerIds { get; set; } = new();
+    }
 }

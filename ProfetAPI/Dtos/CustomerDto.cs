@@ -24,6 +24,16 @@ namespace ProfetAPI.Dtos
         [Required]
         [SwaggerSchema("Suscripción que se contrata al crear el cliente.", Nullable = false)]
         public CreateSubscriptionDto Subscription { get; set; } = null!;
+
+        [SwaggerSchema("IDs de los usuarios internos (rol PM) a asignar como responsables de este cliente.")]
+        public List<string>? PmUserIds { get; set; }
+    }
+
+    public record PmSummaryDto(string Id, string Name);
+
+    public class SetCustomerPmsDto
+    {
+        public List<string> PmUserIds { get; set; } = new();
     }
 
     public record CustomerResponseDto(
@@ -34,7 +44,8 @@ namespace ProfetAPI.Dtos
         string Status,
         string SetupUrl,
         string? SetupToken = null,
-        string? SetupAccessCode = null
+        string? SetupAccessCode = null,
+        List<PmSummaryDto>? Pms = null
     );
 
     public record UpdateCustomerDto(

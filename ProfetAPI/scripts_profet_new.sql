@@ -94,6 +94,24 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.LeadTi
     CREATE INDEX IX_LeadTiers_ScoringModelId ON dbo.LeadTiers(ScoringModelId);
 GO
 
+-- 2026-08-28 — Rol PM: restringe a un usuario interno con rol "PM" a solo ver
+-- los clientes que tiene asignados (antes el rol existía pero era decorativo,
+-- no limitaba nada). Muchos-a-muchos: un PM puede tener varios clientes, un
+-- cliente puede tener más de un PM. Idempotente.
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'PmCustomerAssignments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+    CREATE TABLE dbo.PmCustomerAssignments (
+        Id INT IDENTITY PRIMARY KEY,
+        PmUserId NVARCHAR(450) NOT NULL,
+        CustomerId INT NOT NULL,
+        AssignedOn DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT UQ_PmCustomerAssignments UNIQUE (PmUserId, CustomerId),
+        CONSTRAINT FK_PmCustomerAssignments_User FOREIGN KEY (PmUserId) REFERENCES dbo.Users(Id),
+        CONSTRAINT FK_PmCustomerAssignments_Customer FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(Id)
+    );
+END
+GO
+
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
 -- 32 tablas huérfanas en Profet_new SÍ tienen datos reales (nadie las lee hoy;
 -- LeadCalls/LeadFiles/Calls/AccountUsers/Webhooks ya se sacaron de esta

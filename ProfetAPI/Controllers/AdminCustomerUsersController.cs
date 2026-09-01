@@ -14,21 +14,26 @@ namespace ProfetAPI.Controllers;
 /// </summary>
 [Route("api/admin/customers/{customerId}/users")]
 [ApiController]
-[Authorize(Roles = "AdminGlobal")]
+[Authorize(Roles = "AdminGlobal,PM")]
 [SwaggerTag("Admin Global — Usuarios de Clientes")]
 public class AdminCustomerUsersController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly ProfetAPI.Services.PmScopeService _pmScope;
 
-    public AdminCustomerUsersController(ApplicationDbContext context, UserManager<ApplicationUser> userManager)
+    public AdminCustomerUsersController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.PmScopeService pmScope)
     {
         _context = context;
         _userManager = userManager;
+        _pmScope = pmScope;
     }
 
-    private async Task<bool> CustomerExists(int customerId) =>
-        await _context.Customers.AnyAsync(c => c.Id == customerId && c.Deleted == false);
+    private async Task<bool> CustomerExists(int customerId)
+    {
+        if (!await _pmScope.CanAccessCustomerAsync(User, customerId)) return false;
+        return await _context.Customers.AnyAsync(c => c.Id == customerId && c.Deleted == false);
+    }
 
     // GET /api/admin/customers/{customerId}/users
     [HttpGet]
@@ -120,6 +125,9 @@ public class AdminCustomerUsersController : ControllerBase
     [SwaggerResponse(404, "Usuario no encontrado")]
     public async Task<IActionResult> Delete(int customerId, string userId)
     {
+        if (!await CustomerExists(customerId))
+            return NotFound(new { message = "Cliente no encontrado." });
+
         var user = await _context.Users
             .FirstOrDefaultAsync(u => u.Id == userId && u.CustomerId == customerId && u.Deleted == false);
         if (user == null) return NotFound(new { message = "Usuario no encontrado." });

@@ -127,6 +127,9 @@ namespace ProfetAPI.Data
         // --- DBSET PARA LAYOUT DEL DASHBOARD ---
         public DbSet<DashboardLayout> DashboardLayouts { get; set; } = null!;
 
+        // --- DBSET PARA ASIGNACIÓN DE PMs A CLIENTES ---
+        public DbSet<PmCustomerAssignment> PmCustomerAssignments { get; set; } = null!;
+
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
 
@@ -172,6 +175,8 @@ namespace ProfetAPI.Data
                 .HasForeignKey(r => r.AccountId);
             builder.Entity<SubscriptionFeatureOverride>().HasKey(s => new { s.SubscriptionId, s.FeatureId });
             builder.Entity<SubscriptionFeatureOverride>().ToTable("SubscriptionFeatureOverrides");
+            builder.Entity<PmCustomerAssignment>()
+                .HasIndex(p => new { p.PmUserId, p.CustomerId }).IsUnique();
 
             // Relaciones Específicas
             builder.Entity<ApplicationUser>(b => {

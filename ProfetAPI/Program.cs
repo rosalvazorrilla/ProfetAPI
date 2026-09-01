@@ -84,6 +84,7 @@ builder.Services.AddScoped<ProfetAPI.Services.IWebhookDispatcherService, ProfetA
 builder.Services.AddScoped<ProfetAPI.Services.MetaAdsService>();
 builder.Services.AddScoped<ProfetAPI.Services.AutomationExecutorService>();
 builder.Services.AddScoped<ProfetAPI.Services.PlaybookService>();
+builder.Services.AddScoped<ProfetAPI.Services.PmScopeService>();
 
 // Cifrado de secretos por cuenta (tokens de Meta, etc.) — Data Protection API
 builder.Services.AddSingleton<ProfetAPI.Services.SecretProtector>();
