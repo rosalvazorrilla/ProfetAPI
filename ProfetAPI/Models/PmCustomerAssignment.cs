@@ -12,6 +12,7 @@ public class PmCustomerAssignment
     [Key]
     public int Id { get; set; }
 
+    [MaxLength(128)] // dbo.Users.Id es NVARCHAR(128) en este esquema (no el default 450 de Identity)
     public string PmUserId { get; set; } = null!;
     public int CustomerId { get; set; }
 

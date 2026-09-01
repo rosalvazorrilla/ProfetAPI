@@ -65,52 +65,24 @@
 --   SourcePlaybookTaskId/StageId/ResolutionNote en dbo.Activities. EJECUTADA
 --   (confirmado por el usuario, verificado con sys.columns). Texto completo del
 --   DDL: ver historial de conversación / git blame de este archivo.
+-- 2026-08-27 — Índices faltantes en tablas de Calificación (Scoring):
+--   IX_ScoringModels_AccountId, IX_ScoringRules_ScoringModelId,
+--   IX_ScoringRuleConditions_RuleId, IX_LeadTiers_ScoringModelId. EJECUTADA
+--   (confirmado por el usuario: "lo corri"). No resuelve el tier "Basic" de
+--   Azure SQL (100% I/O sostenido), solo reduce cuánto I/O necesita cada guardado.
+-- 2026-09-01 — Rol PM: tabla dbo.PmCustomerAssignments (muchos-a-muchos
+--   PM↔Cliente). EJECUTADA (corrida por Claude tras detectar que GetById de
+--   CustomersController ya la consultaba sin condición de rol — cualquier "Ver"
+--   de un cliente en /admin tronaba en 500 porque la tabla no existía todavía).
+--   OJO: PmUserId quedó en NVARCHAR(128), NO NVARCHAR(450) como decía el DDL
+--   original — dbo.Users.Id es NVARCHAR(128) en este esquema (no el default 450
+--   de ASP.NET Identity) y SQL Server exige mismo largo para el FK.
+-- 2026-08-07 — Código de acceso del wizard (Customers.SetupAccessCode) +
+--   contraseña por correo al activar (UserProfiles.TempPasswordEncrypted).
+--   EJECUTADA (confirmado con sys.columns).
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
--- 2026-08-07 — Código de acceso del wizard + contraseña por correo al activar.
--- Idempotente.
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Customers') AND name = 'SetupAccessCode')
-    ALTER TABLE dbo.Customers ADD SetupAccessCode NVARCHAR(10) NULL;
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.UserProfiles') AND name = 'TempPasswordEncrypted')
-    ALTER TABLE dbo.UserProfiles ADD TempPasswordEncrypted NVARCHAR(500) NULL;
-GO
-
--- 2026-08-27 — Índices faltantes en tablas de Calificación (Scoring). Encontrados
--- al diagnosticar que "Guardar calificación" se colgaba y tronaba por timeout —
--- causa real: la base está en tier "Basic" (100% de I/O sostenido), pero estos
--- índices reducen cuánto I/O necesita cada guardado (no resuelven el tier).
--- Idempotente.
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ScoringModels') AND name = 'IX_ScoringModels_AccountId')
-    CREATE INDEX IX_ScoringModels_AccountId ON dbo.ScoringModels(AccountId);
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ScoringRules') AND name = 'IX_ScoringRules_ScoringModelId')
-    CREATE INDEX IX_ScoringRules_ScoringModelId ON dbo.ScoringRules(ScoringModelId);
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.ScoringRuleConditions') AND name = 'IX_ScoringRuleConditions_RuleId')
-    CREATE INDEX IX_ScoringRuleConditions_RuleId ON dbo.ScoringRuleConditions(RuleId);
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.LeadTiers') AND name = 'IX_LeadTiers_ScoringModelId')
-    CREATE INDEX IX_LeadTiers_ScoringModelId ON dbo.LeadTiers(ScoringModelId);
-GO
-
--- 2026-08-28 — Rol PM: restringe a un usuario interno con rol "PM" a solo ver
--- los clientes que tiene asignados (antes el rol existía pero era decorativo,
--- no limitaba nada). Muchos-a-muchos: un PM puede tener varios clientes, un
--- cliente puede tener más de un PM. Idempotente.
-IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'PmCustomerAssignments' AND schema_id = SCHEMA_ID('dbo'))
-BEGIN
-    CREATE TABLE dbo.PmCustomerAssignments (
-        Id INT IDENTITY PRIMARY KEY,
-        PmUserId NVARCHAR(450) NOT NULL,
-        CustomerId INT NOT NULL,
-        AssignedOn DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT UQ_PmCustomerAssignments UNIQUE (PmUserId, CustomerId),
-        CONSTRAINT FK_PmCustomerAssignments_User FOREIGN KEY (PmUserId) REFERENCES dbo.Users(Id),
-        CONSTRAINT FK_PmCustomerAssignments_Customer FOREIGN KEY (CustomerId) REFERENCES dbo.Customers(Id)
-    );
-END
-GO
+-- (nada pendiente por ahora)
 
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
 -- 32 tablas huérfanas en Profet_new SÍ tienen datos reales (nadie las lee hoy;
