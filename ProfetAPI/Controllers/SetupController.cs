@@ -2315,9 +2315,13 @@ namespace ProfetAPI.Controllers
                 await transaction.CommitAsync();
 
                 // 4. Mandar por correo la contraseña temporal a cada usuario creado en el wizard
-                // (F12) — antes solo se mostraba en pantalla. Se borra justo después de enviarla.
-                // IMPORTANTE: esto va DESPUÉS del commit y en su propio try/catch — si el envío
-                // de correos falla (SMTP mal configurado, timeout, etc.) NO debe tumbar la
+                // (F12) — antes solo se mostraba en pantalla. IMPORTANTE: ya NO se borra después
+                // de enviarla — se deja guardada cifrada a propósito para que Admin Global pueda
+                // consultarla en cualquier momento desde el botón "🔑 Contraseña" (feedback:
+                // "quiero ver todo el tiempo si ocupo las password", no solo antes del primer
+                // envío). Se sobreescribe si más adelante se genera una nueva vía reset-password.
+                // Este bloque va DESPUÉS del commit y en su propio try/catch — si el envío de
+                // correos falla (SMTP mal configurado, timeout, etc.) NO debe tumbar la
                 // activación que ya quedó guardada. Antes este bloque estaba antes del catch
                 // general, que intentaba un Rollback sobre una transacción ya comprometida y
                 // devolvía un 500 confuso aunque la cuenta sí se hubiera activado.
@@ -2344,7 +2348,7 @@ namespace ProfetAPI.Controllers
                                     logoUrl: logoUrl
                                 )
                             );
-                            if (success) profile.TempPasswordEncrypted = null;
+                            _ = success; // ya no se borra el password guardado tras el envío, ver comentario arriba
                         }
                     }
                     await _context.SaveChangesAsync();

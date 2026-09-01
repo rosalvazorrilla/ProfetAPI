@@ -788,7 +788,7 @@ public class AdminAccountsController : ControllerBase
 
     // GET /api/admin/customers/{customerId}/accounts/{accountId}/users/{userId}/temp-password
     [HttpGet("{accountId}/users/{userId}/temp-password")]
-    [SwaggerOperation(Summary = "Ver la contraseña temporal guardada del usuario, si todavía existe", Description = "Se borra automáticamente en cuanto se le manda por correo al activar el setup — si ya se envió (o nunca se guardó), no hay nada que mostrar.")]
+    [SwaggerOperation(Summary = "Ver la contraseña guardada del usuario, si existe", Description = "Se guarda cifrada al crear el usuario (o al resetearla) y NO se borra al mandarla por correo — queda disponible para Admin Global en cualquier momento. Si el usuario nunca tuvo una password guardada (p.ej. cuenta muy vieja de antes de este cambio), no hay nada que mostrar.")]
     public async Task<IActionResult> GetUserTempPassword(int customerId, int accountId, string userId)
     {
         if (await GetAccount(customerId, accountId) == null)

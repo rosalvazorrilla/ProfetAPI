@@ -21,12 +21,14 @@ public class AdminCustomerUsersController : ControllerBase
     private readonly ApplicationDbContext _context;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ProfetAPI.Services.PmScopeService _pmScope;
+    private readonly ProfetAPI.Services.SecretProtector _secrets;
 
-    public AdminCustomerUsersController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.PmScopeService pmScope)
+    public AdminCustomerUsersController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.PmScopeService pmScope, ProfetAPI.Services.SecretProtector secrets)
     {
         _context = context;
         _userManager = userManager;
         _pmScope = pmScope;
+        _secrets = secrets;
     }
 
     private async Task<bool> CustomerExists(int customerId)
@@ -104,7 +106,11 @@ public class AdminCustomerUsersController : ControllerBase
             UserId = user.Id,
             FirstName = model.FirstName,
             LastName = model.LastName,
-            Phone = model.Phone
+            Phone = model.Phone,
+            // Guardamos la password cifrada para poder mostrarla luego desde
+            // Admin Global (botón "🔑 Contraseña") — antes solo se guardaba la
+            // generada por el wizard, no la que un admin escribe aquí a mano.
+            TempPasswordEncrypted = _secrets.Protect(model.Password)
         });
         await _context.SaveChangesAsync();
 
