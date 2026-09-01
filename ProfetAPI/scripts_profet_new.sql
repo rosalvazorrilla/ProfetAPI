@@ -77,6 +77,8 @@
 --   OJO: PmUserId quedó en NVARCHAR(128), NO NVARCHAR(450) como decía el DDL
 --   original — dbo.Users.Id es NVARCHAR(128) en este esquema (no el default 450
 --   de ASP.NET Identity) y SQL Server exige mismo largo para el FK.
+-- 2026-09-01 — API Keys de integración externa: tabla dbo.AccountApiKeys.
+--   EJECUTADA (confirmado con sys.tables).
 -- 2026-08-07 — Código de acceso del wizard (Customers.SetupAccessCode) +
 --   contraseña por correo al activar (UserProfiles.TempPasswordEncrypted).
 --   EJECUTADA (confirmado con sys.columns).

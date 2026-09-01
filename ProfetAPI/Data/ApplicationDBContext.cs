@@ -113,6 +113,9 @@ namespace ProfetAPI.Data
         public DbSet<AccountWebhook> AccountWebhooks { get; set; } = null!;
         public DbSet<WebhookEventLog> WebhookEventLogs { get; set; } = null!;
 
+        // --- DBSET PARA API KEYS DE INTEGRACIÓN EXTERNA ---
+        public DbSet<AccountApiKey> AccountApiKeys { get; set; } = null!;
+
         // --- DBSETS PARA AUTOMATIZACIONES ---
         public DbSet<AutomationRule> AutomationRules { get; set; } = null!;
         public DbSet<AutomationStep> AutomationSteps { get; set; } = null!;
@@ -177,6 +180,8 @@ namespace ProfetAPI.Data
             builder.Entity<SubscriptionFeatureOverride>().ToTable("SubscriptionFeatureOverrides");
             builder.Entity<PmCustomerAssignment>()
                 .HasIndex(p => new { p.PmUserId, p.CustomerId }).IsUnique();
+            builder.Entity<AccountApiKey>()
+                .HasIndex(k => k.KeyHash).IsUnique();
 
             // Relaciones Específicas
             builder.Entity<ApplicationUser>(b => {

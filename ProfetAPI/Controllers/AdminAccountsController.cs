@@ -24,13 +24,15 @@ public class AdminAccountsController : ControllerBase
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ProfetAPI.Services.SecretProtector _secrets;
     private readonly ProfetAPI.Services.PmScopeService _pmScope;
+    private readonly ProfetAPI.Services.ApiKeyService _apiKeys;
 
-    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.SecretProtector secrets, ProfetAPI.Services.PmScopeService pmScope)
+    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.SecretProtector secrets, ProfetAPI.Services.PmScopeService pmScope, ProfetAPI.Services.ApiKeyService apiKeys)
     {
         _context = context;
         _userManager = userManager;
         _secrets = secrets;
         _pmScope = pmScope;
+        _apiKeys = apiKeys;
     }
 
     /// <summary>Igual que el generador del wizard: garantiza mayúscula, minúscula, dígito y símbolo.</summary>
@@ -847,4 +849,93 @@ public class AdminAccountsController : ControllerBase
         await _context.SaveChangesAsync();
         return NoContent();
     }
+
+    // ════════════════════════════════════════════════════════════
+    // API KEYS — integraciones externas (api/external/*)
+    // ════════════════════════════════════════════════════════════
+
+    // GET /api/admin/customers/{customerId}/accounts/{accountId}/api-keys
+    [HttpGet("{accountId}/api-keys")]
+    [SwaggerOperation(Summary = "Listar API Keys de la cuenta")]
+    public async Task<IActionResult> GetApiKeys(int customerId, int accountId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var keys = await _context.AccountApiKeys
+            .Where(k => k.AccountId == accountId)
+            .OrderByDescending(k => k.CreatedAt)
+            .Select(k => new
+            {
+                k.Id, k.Name, k.Prefix, k.IsActive,
+                k.CreatedAt, k.LastUsedAt, k.RevokedAt,
+            })
+            .ToListAsync();
+        return Ok(keys);
+    }
+
+    // POST /api/admin/customers/{customerId}/accounts/{accountId}/api-keys
+    [HttpPost("{accountId}/api-keys")]
+    [SwaggerOperation(Summary = "Crear una API Key nueva", Description = "La key en texto plano solo se devuelve en esta respuesta — después no se puede volver a ver completa, solo su prefijo (aunque queda guardada cifrada por si hace falta recuperarla desde soporte).")]
+    public async Task<IActionResult> CreateApiKey(int customerId, int accountId, [FromBody] CreateApiKeyDto model)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+        if (string.IsNullOrWhiteSpace(model.Name))
+            return BadRequest(new { message = "El nombre es obligatorio (ej. \"Zapier\", \"Sitio web\")." });
+
+        var raw = _apiKeys.GenerateRawKey();
+        var key = new AccountApiKey
+        {
+            AccountId = accountId,
+            Name = model.Name.Trim(),
+            Prefix = _apiKeys.ToDisplayPrefix(raw),
+            KeyHash = _apiKeys.Hash(raw),
+            KeyEncrypted = _secrets.Protect(raw),
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _context.AccountApiKeys.Add(key);
+        await _context.SaveChangesAsync();
+
+        return Ok(new { key.Id, key.Name, rawKey = raw });
+    }
+
+    // GET /api/admin/customers/{customerId}/accounts/{accountId}/api-keys/{keyId}/reveal
+    [HttpGet("{accountId}/api-keys/{keyId}/reveal")]
+    [SwaggerOperation(Summary = "Volver a ver la key completa", Description = "Para cuando el cliente la perdió y no la guardó al crearla.")]
+    public async Task<IActionResult> RevealApiKey(int customerId, int accountId, int keyId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var key = await _context.AccountApiKeys.FirstOrDefaultAsync(k => k.Id == keyId && k.AccountId == accountId);
+        if (key == null) return NotFound(new { message = "API Key no encontrada." });
+
+        var raw = _secrets.Unprotect(key.KeyEncrypted);
+        if (string.IsNullOrEmpty(raw)) return Ok(new { available = false });
+        return Ok(new { available = true, rawKey = raw });
+    }
+
+    // DELETE /api/admin/customers/{customerId}/accounts/{accountId}/api-keys/{keyId}
+    [HttpDelete("{accountId}/api-keys/{keyId}")]
+    [SwaggerOperation(Summary = "Revocar una API Key", Description = "Deja de funcionar de inmediato para cualquier request nuevo.")]
+    public async Task<IActionResult> RevokeApiKey(int customerId, int accountId, int keyId)
+    {
+        if (await GetAccount(customerId, accountId) == null)
+            return NotFound(new { message = "Cuenta no encontrada." });
+
+        var key = await _context.AccountApiKeys.FirstOrDefaultAsync(k => k.Id == keyId && k.AccountId == accountId);
+        if (key == null) return NotFound(new { message = "API Key no encontrada." });
+
+        key.IsActive = false;
+        key.RevokedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        return Ok(new { revoked = true });
+    }
+}
+
+public class CreateApiKeyDto
+{
+    public string Name { get; set; } = string.Empty;
 }
