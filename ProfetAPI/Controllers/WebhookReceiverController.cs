@@ -168,13 +168,43 @@ public class WebhookReceiverController : ControllerBase
     // ── Custom HTTP ───────────────────────────────────────────────────────────
 
     [HttpPost("custom/{key}")]
-    [SwaggerOperation(Summary = "Webhook HTTP genérico")]
+    [SwaggerOperation(
+        Summary = "Webhook HTTP genérico — recibe un prospecto de cualquier formulario/plataforma externa",
+        Description = "Body JSON plano, ej: {\"name\":\"...\",\"email\":\"...\",\"phone\":\"...\"}. " +
+                      "Si el webhook tiene FieldMappingJson configurado ({\"crmField\":\"jsonKeyEntrante\"}), " +
+                      "se usa ese mapeo; si no, se buscan alias comunes (name/nombre, email/correo, " +
+                      "phone/telefono/celular, company/empresa, city/ciudad, message/mensaje/comentarios)."
+    )]
     public async Task<IActionResult> CustomEvent(string key)
     {
         var wh = await FindWebhook(key, "CustomHttp");
         if (wh == null) return NotFound();
-        await BumpMetrics(wh);
-        return Ok(new { received = true });
+
+        var body = await ReadRawBody();
+        var doc = ParseJson(body);
+        if (doc == null)
+        {
+            await BumpMetrics(wh);
+            wh.LastError = "Body no es JSON válido.";
+            await _db.SaveChangesAsync();
+            return BadRequest(new { received = false, error = "Body no es JSON válido." });
+        }
+
+        try
+        {
+            await ProcessCustomLead(wh, doc.RootElement);
+            await BumpMetrics(wh);
+            return Ok(new { received = true });
+        }
+        catch (Exception ex)
+        {
+            var err = ex.Message[..Math.Min(ex.Message.Length, 300)];
+            wh.LastError = err;
+            _db.WebhookEventLogs.Add(new WebhookEventLog { WebhookId = wh.WebhookId, Status = "Error", ErrorMessage = err });
+            await BumpMetrics(wh);
+            _log.LogError(ex, "Error procesando lead de webhook custom {Key}", key);
+            return Ok(new { received = true, processed = false }); // 200 igual: no queremos que el emisor externo reintente en loop
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -347,6 +377,115 @@ public class WebhookReceiverController : ControllerBase
             _db.WebhookEventLogs.Add(new WebhookEventLog { WebhookId = wh.WebhookId, Status = "Error", ExternalId = leadgenId, ErrorMessage = err });
             _log.LogError(ex, "Error procesando Meta lead {Id}", leadgenId);
         }
+    }
+
+    private async Task ProcessCustomLead(AccountWebhook wh, JsonElement root)
+    {
+        // Aplanar el JSON entrante a un diccionario string→string (solo top-level;
+        // valores anidados/objetos se ignoran, arrays toman su primer elemento).
+        var incoming = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in root.EnumerateObject())
+            {
+                var val = prop.Value.ValueKind switch
+                {
+                    JsonValueKind.String => prop.Value.GetString() ?? "",
+                    JsonValueKind.Number => prop.Value.ToString(),
+                    JsonValueKind.True or JsonValueKind.False => prop.Value.ToString(),
+                    JsonValueKind.Array when prop.Value.GetArrayLength() > 0 =>
+                        prop.Value[0].ValueKind == JsonValueKind.String ? (prop.Value[0].GetString() ?? "") : prop.Value[0].ToString(),
+                    _ => ""
+                };
+                if (!string.IsNullOrEmpty(val)) incoming[prop.Name] = val;
+            }
+        }
+
+        // Mapeo configurado: {"crmField":"jsonKeyEntrante"}. Si no hay mapeo (o el campo
+        // no está mapeado), se cae a alias comunes en español/inglés.
+        var crmValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var mapped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(wh.FieldMappingJson))
+        {
+            try
+            {
+                var fmap = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(wh.FieldMappingJson);
+                if (fmap != null)
+                    foreach (var (crmField, jsonKey) in fmap)
+                    {
+                        mapped.Add(crmField);
+                        if (!string.IsNullOrEmpty(jsonKey) && incoming.TryGetValue(jsonKey, out var v) && !string.IsNullOrEmpty(v))
+                            crmValues[crmField] = v;
+                    }
+            }
+            catch { /* mapeo mal formado: se ignora, cae a alias */ }
+        }
+
+        crmValues = FormatterEngine.Apply(wh.FormatterJson, incoming, crmValues);
+
+        string Get(string crmField, params string[] aliases)
+        {
+            if (crmValues.TryGetValue(crmField, out var v) && !string.IsNullOrEmpty(v)) return v;
+            if (mapped.Contains(crmField)) return ""; // está mapeado explícitamente a otra cosa: no usar alias
+            foreach (var a in aliases)
+                if (incoming.TryGetValue(a, out var av) && !string.IsNullOrEmpty(av)) return av;
+            return "";
+        }
+
+        var name    = Get("name", "name", "fullName", "full_name", "nombre").IfEmpty("Prospecto Web");
+        var email   = Get("email", "email", "correo");
+        var phone   = Get("phone", "phone", "telefono", "teléfono", "celular", "phone_number");
+        var company = Get("company", "company", "empresa", "company_name");
+        var city    = Get("city", "city", "ciudad");
+        var message = Get("message", "message", "mensaje", "comentarios", "comment", "comments");
+        var source  = Get("prospectSource", "source", "prospectSource", "utm_source").IfEmpty(wh.Name);
+
+        var summary = name;
+        if (!string.IsNullOrEmpty(email)) summary += $" · {email}";
+
+        switch (wh.ActionType)
+        {
+            case "CreateContact":
+                var nameParts = name.Split(' ', 2);
+                _db.Contacts.Add(new Contact
+                {
+                    FirstName       = nameParts[0],
+                    LastName        = nameParts.Length > 1 ? nameParts[1] : null,
+                    Email           = email.NullIfEmpty(),
+                    PhoneNumber     = phone.NullIfEmpty(),
+                    LifecycleStatus = "Nuevo",
+                    CreatedOn       = DateTime.UtcNow,
+                });
+                break;
+
+            case "LogOnly":
+                _log.LogInformation("Lead de webhook custom recibido (solo log) — Cuenta {AccountId}: {Summary}", wh.AccountId, summary);
+                break;
+
+            default: // CreateLead
+                _db.Leads.Add(new Lead
+                {
+                    AccountId      = wh.AccountId,
+                    Name           = name,
+                    Email          = email.NullIfEmpty(),
+                    Phone          = phone.NullIfEmpty(),
+                    Company        = company.NullIfEmpty(),
+                    City           = city.NullIfEmpty(),
+                    InitialMessage = message.NullIfEmpty(),
+                    ProspectSource = source,
+                    StageId        = wh.DestFunnelId,
+                    Status         = wh.DestLeadStatus ?? "Nuevo",
+                    OriginType     = "Inbound",
+                    Active         = true,
+                    Deleted        = false,
+                    CreatedOn      = DateTime.UtcNow,
+                });
+                break;
+        }
+
+        _db.WebhookEventLogs.Add(new WebhookEventLog { WebhookId = wh.WebhookId, Status = "Success", Summary = summary[..Math.Min(summary.Length, 300)] });
+        wh.LastError = null;
+        await _db.SaveChangesAsync();
     }
 
     private async Task BumpMetrics(AccountWebhook wh)
