@@ -34,6 +34,7 @@ public class LegacyLeadsApiController : ControllerBase
     private readonly IScoringAiService _scoringAi;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly LeadAssignmentService _assignment;
+    private readonly IngestionLogger _ingestionLog;
 
     public LegacyLeadsApiController(
         ApplicationDbContext context,
@@ -42,7 +43,8 @@ public class LegacyLeadsApiController : ControllerBase
         INotificationService notify,
         IScoringAiService scoringAi,
         IServiceScopeFactory scopeFactory,
-        LeadAssignmentService assignment)
+        LeadAssignmentService assignment,
+        IngestionLogger ingestionLog)
     {
         _context = context;
         _automations = automations;
@@ -51,6 +53,7 @@ public class LegacyLeadsApiController : ControllerBase
         _scoringAi = scoringAi;
         _scopeFactory = scopeFactory;
         _assignment = assignment;
+        _ingestionLog = ingestionLog;
     }
 
     // POST /api/leadsapi — mismo path y método que el sistema viejo
@@ -103,39 +106,57 @@ public class LegacyLeadsApiController : ControllerBase
         if (string.IsNullOrEmpty(lead.OwnerUserId))
             lead.OwnerUserId = await _assignment.ResolveOwnerAsync(account.AccountId);
 
-        _context.Leads.Add(lead);
-        await _context.SaveChangesAsync();
+        try
+        {
+            _context.Leads.Add(lead);
+            await _context.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _ = _ingestionLog.LogAsync("LegacyCompat", $"CampaignId {model.CampaignId} — {model.Name ?? model.Email ?? "sin nombre"}: {ex.Message}", success: false);
+            return StatusCode(500, new { message = "No se pudo crear el prospecto." });
+        }
+        _ = _ingestionLog.LogAsync("LegacyCompat", $"CampaignId {model.CampaignId} — Lead {lead.LeadId}: {lead.Name}");
 
         // De aquí para abajo: exactamente el mismo pipeline que POST /api/leads (la vía
         // "oficial" del sistema nuevo) — playbook de tareas, notificación al vendedor
         // asignado, auto-calificación IA preliminar, y automatizaciones de la cuenta.
-        if (!string.IsNullOrEmpty(lead.OwnerUserId))
-            await _notify.NotifyAsync(lead.OwnerUserId, $"Nuevo prospecto asignado: {lead.Name}",
-                url: $"/prospectos?id={lead.LeadId}", entityType: "Lead", entityId: lead.LeadId);
-
-        await _playbooks.ApplyDefaultAsync(account.AccountId, lead.LeadId, lead.OwnerUserId);
-
-        if (_scoringAi.IsConfigured)
+        // El lead YA quedó guardado arriba — si algo de esto falla no debe tumbar la
+        // respuesta a la landing, solo quedar registrado.
+        try
         {
-            var newLeadId = lead.LeadId;
-            _ = Task.Run(async () =>
+            if (!string.IsNullOrEmpty(lead.OwnerUserId))
+                await _notify.NotifyAsync(lead.OwnerUserId, $"Nuevo prospecto asignado: {lead.Name}",
+                    url: $"/prospectos?id={lead.LeadId}", entityType: "Lead", entityId: lead.LeadId);
+
+            await _playbooks.ApplyDefaultAsync(account.AccountId, lead.LeadId, lead.OwnerUserId);
+
+            if (_scoringAi.IsConfigured)
             {
-                using var scope = _scopeFactory.CreateScope();
-                var ai = scope.ServiceProvider.GetRequiredService<IScoringAiService>();
-                try { await ai.ScoreAndPersistAsync(newLeadId); } catch { /* no romper la ingesta */ }
-            });
-        }
+                var newLeadId = lead.LeadId;
+                _ = Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var ai = scope.ServiceProvider.GetRequiredService<IScoringAiService>();
+                    try { await ai.ScoreAndPersistAsync(newLeadId); } catch { /* no romper la ingesta */ }
+                });
+            }
 
-        _ = Task.Run(() => _automations.FireAsync(account.AccountId, "LeadCreated", new Dictionary<string, string>
+            _ = Task.Run(() => _automations.FireAsync(account.AccountId, "LeadCreated", new Dictionary<string, string>
+            {
+                ["_leadId"]        = lead.LeadId.ToString(),
+                ["name"]           = lead.Name          ?? "",
+                ["email"]          = lead.Email         ?? "",
+                ["phone"]          = lead.Phone         ?? "",
+                ["company"]        = lead.Company       ?? "",
+                ["prospectSource"] = lead.ProspectSource?? "",
+                ["status"]         = lead.Status,
+            }));
+        }
+        catch (Exception ex)
         {
-            ["_leadId"]        = lead.LeadId.ToString(),
-            ["name"]           = lead.Name          ?? "",
-            ["email"]          = lead.Email         ?? "",
-            ["phone"]          = lead.Phone         ?? "",
-            ["company"]        = lead.Company       ?? "",
-            ["prospectSource"] = lead.ProspectSource?? "",
-            ["status"]         = lead.Status,
-        }));
+            _ = _ingestionLog.LogAsync("LegacyCompat", $"Lead {lead.LeadId} creado pero falló el pipeline post-creación: {ex.Message}", success: false);
+        }
 
         // El sistema viejo devolvía el objeto Lead completo con 200 OK y un header
         // "Lead-ID" — se replica el header por si alguna landing lo lee, y un body

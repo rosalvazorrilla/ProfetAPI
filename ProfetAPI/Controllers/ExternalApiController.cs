@@ -25,13 +25,15 @@ public class ExternalApiController : ControllerBase
     private readonly ApiKeyService _apiKeys;
     private readonly ITimelineLogger _timeline;
     private readonly LeadAssignmentService _assignment;
+    private readonly IngestionLogger _ingestionLog;
 
-    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys, ITimelineLogger timeline, LeadAssignmentService assignment)
+    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys, ITimelineLogger timeline, LeadAssignmentService assignment, IngestionLogger ingestionLog)
     {
         _context = context;
         _apiKeys = apiKeys;
         _timeline = timeline;
         _assignment = assignment;
+        _ingestionLog = ingestionLog;
     }
 
     // ── Autenticación por API Key ───────────────────────────────────────────
@@ -86,8 +88,17 @@ public class ExternalApiController : ControllerBase
         // carrusel/round-robin), igual que cualquier otro canal de entrada.
         lead.OwnerUserId = await _assignment.ResolveOwnerAsync(key.AccountId);
 
-        _context.Leads.Add(lead);
-        await _context.SaveChangesAsync();
+        try
+        {
+            _context.Leads.Add(lead);
+            await _context.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _ = _ingestionLog.LogAsync("ApiKey", $"Cuenta {key.AccountId} ({key.Name}) — {model.Name ?? model.Email ?? "sin nombre"}: {ex.Message}", success: false);
+            return StatusCode(500, new { message = "No se pudo crear el prospecto. Ya quedó registrado el error para revisión." });
+        }
+        _ = _ingestionLog.LogAsync("ApiKey", $"Cuenta {key.AccountId} ({key.Name}) — Lead {lead.LeadId}: {lead.Name}");
 
         return CreatedAtAction(nameof(GetLead), new { id = lead.LeadId }, new
         {

@@ -90,6 +90,7 @@ builder.Services.AddScoped<ProfetAPI.Services.PmScopeService>();
 builder.Services.AddSingleton<ProfetAPI.Services.SecretProtector>();
 builder.Services.AddSingleton<ProfetAPI.Services.ApiKeyService>();
 builder.Services.AddScoped<ProfetAPI.Services.LeadAssignmentService>();
+builder.Services.AddSingleton<ProfetAPI.Services.IngestionLogger>();
 
 // Cliente de IA (Claude) — infraestructura compartida por scoring, dashboard, inbox, llamadas…
 builder.Services.AddScoped<ProfetAPI.Services.IAiClient, ProfetAPI.Services.AnthropicAiClient>();

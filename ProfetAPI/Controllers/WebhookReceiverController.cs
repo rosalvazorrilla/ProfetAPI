@@ -26,15 +26,18 @@ public class WebhookReceiverController : ControllerBase
     private readonly IConfiguration       _config;
     private readonly ILogger<WebhookReceiverController> _log;
     private readonly LeadAssignmentService _assignment;
+    private readonly IngestionLogger _ingestionLog;
 
     public WebhookReceiverController(ApplicationDbContext db, IHttpClientFactory http,
-        IConfiguration config, ILogger<WebhookReceiverController> log, LeadAssignmentService assignment)
+        IConfiguration config, ILogger<WebhookReceiverController> log, LeadAssignmentService assignment,
+        IngestionLogger ingestionLog)
     {
         _db     = db;
         _http   = http;
         _config = config;
         _log    = log;
         _assignment = assignment;
+        _ingestionLog = ingestionLog;
     }
 
     // ── Meta Lead Ads — Endpoint único (URL registrada en Meta for Developers) ─
@@ -196,6 +199,7 @@ public class WebhookReceiverController : ControllerBase
         {
             await ProcessCustomLead(wh, doc.RootElement);
             await BumpMetrics(wh);
+            _ = _ingestionLog.LogAsync("CustomWebhook", $"Cuenta {wh.AccountId} ({wh.Name}) — key {key}");
             return Ok(new { received = true });
         }
         catch (Exception ex)
@@ -205,6 +209,7 @@ public class WebhookReceiverController : ControllerBase
             _db.WebhookEventLogs.Add(new WebhookEventLog { WebhookId = wh.WebhookId, Status = "Error", ErrorMessage = err });
             await BumpMetrics(wh);
             _log.LogError(ex, "Error procesando lead de webhook custom {Key}", key);
+            _ = _ingestionLog.LogAsync("CustomWebhook", $"Cuenta {wh.AccountId} ({wh.Name}) — key {key}: {err}", success: false);
             return Ok(new { received = true, processed = false }); // 200 igual: no queremos que el emisor externo reintente en loop
         }
     }
@@ -372,6 +377,7 @@ public class WebhookReceiverController : ControllerBase
 
             _db.WebhookEventLogs.Add(new WebhookEventLog { WebhookId = wh.WebhookId, Status = "Success", ExternalId = leadgenId, Summary = summary[..Math.Min(summary.Length, 300)] });
             wh.LastError = null;
+            _ = _ingestionLog.LogAsync("MetaWebhook", $"Cuenta {wh.AccountId} ({wh.Name}) — {summary}");
         }
         catch (Exception ex)
         {
@@ -379,6 +385,7 @@ public class WebhookReceiverController : ControllerBase
             wh.LastError = err;
             _db.WebhookEventLogs.Add(new WebhookEventLog { WebhookId = wh.WebhookId, Status = "Error", ExternalId = leadgenId, ErrorMessage = err });
             _log.LogError(ex, "Error procesando Meta lead {Id}", leadgenId);
+            _ = _ingestionLog.LogAsync("MetaWebhook", $"Cuenta {wh.AccountId} ({wh.Name}) — leadgenId {leadgenId}: {err}", success: false);
         }
     }
 
