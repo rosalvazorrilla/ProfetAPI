@@ -45,7 +45,9 @@ namespace ProfetAPI.Dtos
         string SetupUrl,
         string? SetupToken = null,
         string? SetupAccessCode = null,
-        List<PmSummaryDto>? Pms = null
+        List<PmSummaryDto>? Pms = null,
+        int SetupStep = 0,
+        string? PlanName = null
     );
 
     public record UpdateCustomerDto(

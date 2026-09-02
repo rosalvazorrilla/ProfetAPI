@@ -66,11 +66,38 @@ namespace ProfetAPI.Controllers
                     $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
                     c.SetupToken,
                     null,
+                    null,
+                    c.SetupStep,
                     null
                 ))
                 .ToListAsync();
 
-            return Ok(customers);
+            var customerIds = customers.Select(c => c.Id).ToList();
+
+            // Plan vigente por cliente (la suscripción más reciente) — antes esta lista
+            // siempre mostraba "—" porque GetAll nunca consultaba Subscriptions/Plan.
+            var plans = await _context.Subscriptions
+                .Where(s => customerIds.Contains(s.CustomerId))
+                .OrderByDescending(s => s.SubscriptionId)
+                .Select(s => new { s.CustomerId, PlanName = s.Plan.Name })
+                .ToListAsync();
+            var planByCustomer = plans.GroupBy(p => p.CustomerId).ToDictionary(g => g.Key, g => g.First().PlanName);
+
+            // PMs asignados por cliente — antes esta lista siempre mandaba Pms=null.
+            var pmRows = await _context.PmCustomerAssignments
+                .Where(a => customerIds.Contains(a.CustomerId))
+                .Select(a => new { a.CustomerId, a.PmUserId, Name = (a.PmUser.UserProfile!.FirstName + " " + a.PmUser.UserProfile.LastName).Trim() })
+                .ToListAsync();
+            var pmsByCustomer = pmRows.GroupBy(r => r.CustomerId)
+                .ToDictionary(g => g.Key, g => g.Select(r => new PmSummaryDto(r.PmUserId, r.Name)).ToList());
+
+            var result = customers.Select(c => c with
+            {
+                PlanName = planByCustomer.TryGetValue(c.Id, out var pn) ? pn : null,
+                Pms = pmsByCustomer.TryGetValue(c.Id, out var pms) ? pms : new List<PmSummaryDto>(),
+            }).ToList();
+
+            return Ok(result);
         }
 
         // ── GET api/customers/5 ──────────────────────────────────────────────
@@ -91,6 +118,8 @@ namespace ProfetAPI.Controllers
                     $"{_frontendBaseUrl}/setup?token={c.SetupToken}",
                     c.SetupToken,
                     null,
+                    null,
+                    c.SetupStep,
                     null
                 ))
                 .FirstOrDefaultAsync();
@@ -99,7 +128,12 @@ namespace ProfetAPI.Controllers
                 return NotFound(new { message = "El cliente no existe o fue eliminado." });
 
             var pms = await GetPmsForCustomerAsync(id);
-            return Ok(customer with { Pms = pms });
+            var planName = await _context.Subscriptions
+                .Where(s => s.CustomerId == id)
+                .OrderByDescending(s => s.SubscriptionId)
+                .Select(s => s.Plan.Name)
+                .FirstOrDefaultAsync();
+            return Ok(customer with { Pms = pms, PlanName = planName });
         }
 
         // ── POST api/customers ───────────────────────────────────────────────
