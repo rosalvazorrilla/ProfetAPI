@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using ProfetAPI.Data;
 using ProfetAPI.Models;
 using ProfetAPI.Services;
@@ -28,11 +29,25 @@ public class LegacyLeadsApiController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly AutomationExecutorService _automations;
+    private readonly PlaybookService _playbooks;
+    private readonly INotificationService _notify;
+    private readonly IScoringAiService _scoringAi;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public LegacyLeadsApiController(ApplicationDbContext context, AutomationExecutorService automations)
+    public LegacyLeadsApiController(
+        ApplicationDbContext context,
+        AutomationExecutorService automations,
+        PlaybookService playbooks,
+        INotificationService notify,
+        IScoringAiService scoringAi,
+        IServiceScopeFactory scopeFactory)
     {
         _context = context;
         _automations = automations;
+        _playbooks = playbooks;
+        _notify = notify;
+        _scoringAi = scoringAi;
+        _scopeFactory = scopeFactory;
     }
 
     // POST /api/leadsapi — mismo path y método que el sistema viejo
@@ -74,9 +89,9 @@ public class LegacyLeadsApiController : ControllerBase
             CreatedOn      = DateTime.UtcNow,
         };
 
-        // Asignación directa si mandan un UserId válido de esta cuenta (igual que antes,
-        // sin el round-robin de campaña que tenía el sistema viejo — eso ya lo hace
-        // el playbook/automatizaciones del sistema nuevo).
+        // Asignación directa si mandan un UserId válido de esta cuenta (el round-robin
+        // de campaña del sistema viejo no se replica — ya no aplica, el sistema nuevo
+        // no lo tiene como concepto; si no viene UserId, el lead queda sin asignar).
         if (!string.IsNullOrWhiteSpace(model.UserId))
         {
             var validOwner = await _context.AccountInternalUsers
@@ -87,7 +102,26 @@ public class LegacyLeadsApiController : ControllerBase
         _context.Leads.Add(lead);
         await _context.SaveChangesAsync();
 
-        // Mismas automatizaciones que el resto de vías de ingesta (playbook, notificaciones, etc.)
+        // De aquí para abajo: exactamente el mismo pipeline que POST /api/leads (la vía
+        // "oficial" del sistema nuevo) — playbook de tareas, notificación al vendedor
+        // asignado, auto-calificación IA preliminar, y automatizaciones de la cuenta.
+        if (!string.IsNullOrEmpty(lead.OwnerUserId))
+            await _notify.NotifyAsync(lead.OwnerUserId, $"Nuevo prospecto asignado: {lead.Name}",
+                url: $"/prospectos?id={lead.LeadId}", entityType: "Lead", entityId: lead.LeadId);
+
+        await _playbooks.ApplyDefaultAsync(account.AccountId, lead.LeadId, lead.OwnerUserId);
+
+        if (_scoringAi.IsConfigured)
+        {
+            var newLeadId = lead.LeadId;
+            _ = Task.Run(async () =>
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var ai = scope.ServiceProvider.GetRequiredService<IScoringAiService>();
+                try { await ai.ScoreAndPersistAsync(newLeadId); } catch { /* no romper la ingesta */ }
+            });
+        }
+
         _ = Task.Run(() => _automations.FireAsync(account.AccountId, "LeadCreated", new Dictionary<string, string>
         {
             ["_leadId"]        = lead.LeadId.ToString(),

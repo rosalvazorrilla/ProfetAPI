@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using ProfetAPI.Data;
 using ProfetAPI.Models;
 
@@ -16,14 +17,28 @@ public class AutomationExecutorService(
     IHttpClientFactory httpFactory,
     IEmailService emailService,
     PlaybookService playbooks,
-    ILogger<AutomationExecutorService> logger)
+    ILogger<AutomationExecutorService> logger,
+    IServiceScopeFactory scopeFactory)
 {
     // ── Public entry points ──────────────────────────────────────────────────
 
-    /// <summary>Dispara todas las reglas activas para una cuenta que coincidan con el triggerType.</summary>
+    /// <summary>
+    /// Dispara todas las reglas activas para una cuenta que coincidan con el triggerType.
+    /// Se llama casi siempre desde un "_ = Task.Run(...)" fire-and-forget DESPUÉS de que
+    /// la respuesta HTTP ya se mandó — para entonces el DbContext de la request (inyectado
+    /// arriba como 'db') ya está Dispose()ado por el contenedor de DI, y usarlo revienta con
+    /// ObjectDisposedException (silencioso: no rompe la respuesta al usuario, pero ninguna
+    /// automatización se ejecuta nunca). Por eso este método abre SU PROPIO scope de DI y
+    /// resuelve una instancia fresca del servicio con su propio DbContext, en vez de usar
+    /// el 'db' inyectado en el constructor.
+    /// </summary>
     public async Task FireAsync(int accountId, string triggerType, Dictionary<string, string> fields)
     {
-        var rules = await db.AutomationRules
+        using var scope = scopeFactory.CreateScope();
+        var freshDb = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var scoped = scope.ServiceProvider.GetRequiredService<AutomationExecutorService>();
+
+        var rules = await freshDb.AutomationRules
             .Where(r => r.AccountId == accountId && r.TriggerType == triggerType
                      && r.IsActive && !r.Deleted)
             .Include(r => r.Steps.Where(s => s.IsActive).OrderBy(s => s.StepOrder))
@@ -32,7 +47,7 @@ public class AutomationExecutorService(
         foreach (var rule in rules)
         {
             if (!EvaluateConditions(rule.ConditionsJson, fields)) continue;
-            await ExecuteRuleAsync(rule, new Dictionary<string, string>(fields));
+            await scoped.ExecuteRuleAsync(rule, new Dictionary<string, string>(fields));
         }
     }
 
