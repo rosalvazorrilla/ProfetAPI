@@ -23,11 +23,13 @@ public class ExternalApiController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly ApiKeyService _apiKeys;
+    private readonly ITimelineLogger _timeline;
 
-    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys)
+    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys, ITimelineLogger timeline)
     {
         _context = context;
         _apiKeys = apiKeys;
+        _timeline = timeline;
     }
 
     // ── Autenticación por API Key ───────────────────────────────────────────
@@ -130,8 +132,8 @@ public class ExternalApiController : ControllerBase
 
     // GET /api/external/leads
     [HttpGet("leads")]
-    [SwaggerOperation(Summary = "Listar prospectos de la cuenta")]
-    public async Task<IActionResult> GetLeads([FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    [SwaggerOperation(Summary = "Listar prospectos de la cuenta, o buscar por email/teléfono", Description = "Manda email o phone para revisar si un prospecto ya existe antes de crearlo (evita duplicados en reintentos de formulario).")]
+    public async Task<IActionResult> GetLeads([FromQuery] string? email, [FromQuery] string? phone, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
     {
         var key = await ResolveKeyAsync();
         if (key == null) return Unauthenticated();
@@ -140,6 +142,8 @@ public class ExternalApiController : ControllerBase
         page = Math.Max(page, 1);
 
         var query = _context.Leads.Where(l => l.AccountId == key.AccountId && (l.Deleted ?? false) == false);
+        if (!string.IsNullOrWhiteSpace(email)) query = query.Where(l => l.Email == email.Trim());
+        if (!string.IsNullOrWhiteSpace(phone)) query = query.Where(l => l.Phone == phone.Trim());
         var total = await query.CountAsync();
         var leads = await query
             .OrderByDescending(l => l.CreatedOn)
@@ -172,6 +176,223 @@ public class ExternalApiController : ControllerBase
             .FirstOrDefaultAsync();
         if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
         return Ok(lead);
+    }
+
+    // POST /api/external/leads/{id}/notes
+    [HttpPost("leads/{id:long}/notes")]
+    [SwaggerOperation(Summary = "Agregar una nota a la línea de tiempo del prospecto")]
+    public async Task<IActionResult> AddLeadNote(long id, [FromBody] ExternalNoteDto model)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+        if (string.IsNullOrWhiteSpace(model.Text)) return BadRequest(new { message = "La nota no puede estar vacía." });
+
+        var lead = await _context.Leads.FirstOrDefaultAsync(l => l.LeadId == id && l.AccountId == key.AccountId);
+        if (lead == null || lead.Deleted == true) return NotFound(new { message = "Prospecto no encontrado." });
+
+        await _timeline.LogAsync(key.AccountId, "Lead", id, "note", "Nota", detail: model.Text.Trim(), userId: null);
+        return Ok(new { added = true });
+    }
+
+    // POST /api/external/leads/{id}/tags
+    [HttpPost("leads/{id:long}/tags")]
+    [SwaggerOperation(Summary = "Etiquetar un prospecto")]
+    public async Task<IActionResult> AddLeadTag(long id, [FromBody] ExternalTagDto model)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        var lead = await _context.Leads.FirstOrDefaultAsync(l => l.LeadId == id && l.AccountId == key.AccountId);
+        if (lead == null || lead.Deleted == true) return NotFound(new { message = "Prospecto no encontrado." });
+
+        var customerId = await _context.Accounts.AsNoTracking()
+            .Where(a => a.AccountId == key.AccountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        var tag = await _context.Tags.FirstOrDefaultAsync(t => t.TagId == model.TagId && t.CustomerId == customerId);
+        if (tag == null) return NotFound(new { message = "Etiqueta no encontrada." });
+
+        var already = await _context.Taggings.AnyAsync(t => t.TagId == model.TagId && t.LeadId == (int)id);
+        if (!already)
+        {
+            _context.Taggings.Add(new Tagging { TagId = model.TagId, LeadId = (int)id });
+            await _context.SaveChangesAsync();
+        }
+        return Ok(new { assigned = true });
+    }
+
+    // DELETE /api/external/leads/{id}/tags/{tagId}
+    [HttpDelete("leads/{id:long}/tags/{tagId:int}")]
+    [SwaggerOperation(Summary = "Quitar una etiqueta de un prospecto")]
+    public async Task<IActionResult> RemoveLeadTag(long id, int tagId)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        var lead = await _context.Leads.FirstOrDefaultAsync(l => l.LeadId == id && l.AccountId == key.AccountId);
+        if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        var tagging = await _context.Taggings.FirstOrDefaultAsync(t => t.TagId == tagId && t.LeadId == (int)id);
+        if (tagging != null)
+        {
+            _context.Taggings.Remove(tagging);
+            await _context.SaveChangesAsync();
+        }
+        return Ok(new { removed = true });
+    }
+
+    // ── Contactos ────────────────────────────────────────────────────────────
+
+    private async Task<List<int>> GetAccountContactIdsAsync(int accountId)
+    {
+        var leadContactIds = await _context.Leads.AsNoTracking()
+            .Where(l => l.AccountId == accountId && l.ContactId != null && (l.Deleted ?? false) == false)
+            .Select(l => l.ContactId!.Value).Distinct().ToListAsync();
+        var dealContactIds = await _context.Deals.AsNoTracking()
+            .Where(d => d.AccountId == accountId && d.PrimaryContactId != null)
+            .Select(d => d.PrimaryContactId!.Value).Distinct().ToListAsync();
+        return leadContactIds.Union(dealContactIds).Distinct().ToList();
+    }
+
+    // GET /api/external/contacts
+    [HttpGet("contacts")]
+    [SwaggerOperation(Summary = "Listar contactos de la cuenta, o buscar por email")]
+    public async Task<IActionResult> GetContacts([FromQuery] string? email, [FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        pageSize = Math.Clamp(pageSize, 1, 200);
+        var contactIds = await GetAccountContactIdsAsync(key.AccountId);
+        var query = _context.Contacts.AsNoTracking().Where(c => contactIds.Contains(c.ContactId));
+        if (!string.IsNullOrWhiteSpace(email)) query = query.Where(c => c.Email == email.Trim());
+
+        var total = await query.CountAsync();
+        var contacts = await query
+            .OrderByDescending(c => c.CreatedOn)
+            .Skip((Math.Max(page, 1) - 1) * pageSize).Take(pageSize)
+            .Select(c => new { c.ContactId, c.FirstName, c.LastName, c.Email, c.PhoneNumber, c.Position, c.LifecycleStatus, c.CompanyId, c.CreatedOn })
+            .ToListAsync();
+        return Ok(new { total, page, pageSize, contacts });
+    }
+
+    // GET /api/external/contacts/{id}
+    [HttpGet("contacts/{id:int}")]
+    [SwaggerOperation(Summary = "Obtener un contacto")]
+    public async Task<IActionResult> GetContact(int id)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        var contactIds = await GetAccountContactIdsAsync(key.AccountId);
+        if (!contactIds.Contains(id)) return NotFound(new { message = "Contacto no encontrado." });
+
+        var contact = await _context.Contacts.AsNoTracking()
+            .Where(c => c.ContactId == id)
+            .Select(c => new { c.ContactId, c.FirstName, c.LastName, c.Email, c.PhoneNumber, c.Position, c.LifecycleStatus, c.PostalCode, c.CompanyId, c.CreatedOn, c.ModifiedOn })
+            .FirstOrDefaultAsync();
+        if (contact == null) return NotFound(new { message = "Contacto no encontrado." });
+        return Ok(contact);
+    }
+
+    // PUT /api/external/contacts/{id}
+    [HttpPut("contacts/{id:int}")]
+    [SwaggerOperation(Summary = "Actualizar un contacto (parcial)")]
+    public async Task<IActionResult> UpdateContact(int id, [FromBody] ContactUpsertDto model)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        var contactIds = await GetAccountContactIdsAsync(key.AccountId);
+        if (!contactIds.Contains(id)) return NotFound(new { message = "Contacto no encontrado." });
+
+        var contact = await _context.Contacts.FindAsync(id);
+        if (contact == null) return NotFound(new { message = "Contacto no encontrado." });
+
+        contact.FirstName       = model.FirstName       ?? contact.FirstName;
+        contact.LastName        = model.LastName        ?? contact.LastName;
+        contact.Email           = model.Email           ?? contact.Email;
+        contact.PhoneNumber     = model.PhoneNumber     ?? contact.PhoneNumber;
+        contact.Position        = model.Position        ?? contact.Position;
+        contact.PostalCode      = model.PostalCode      ?? contact.PostalCode;
+        contact.CompanyId       = model.CompanyId       ?? contact.CompanyId;
+        contact.LifecycleStatus = model.LifecycleStatus ?? contact.LifecycleStatus;
+        contact.ModifiedOn      = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        return Ok(new { contact.ContactId, updated = true });
+    }
+
+    // ── Empresas ─────────────────────────────────────────────────────────────
+
+    private async Task<List<int>> GetAccountCompanyIdsAsync(int accountId) =>
+        await _context.Deals.AsNoTracking()
+            .Where(d => d.AccountId == accountId && d.CompanyId != null)
+            .Select(d => d.CompanyId!.Value).Distinct().ToListAsync();
+
+    // GET /api/external/companies
+    [HttpGet("companies")]
+    [SwaggerOperation(Summary = "Listar empresas de la cuenta")]
+    public async Task<IActionResult> GetCompanies([FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        pageSize = Math.Clamp(pageSize, 1, 200);
+        var companyIds = await GetAccountCompanyIdsAsync(key.AccountId);
+        var query = _context.Companies.AsNoTracking().Where(c => companyIds.Contains(c.CompanyId));
+        var total = await query.CountAsync();
+        var companies = await query
+            .OrderByDescending(c => c.CreatedOn)
+            .Skip((Math.Max(page, 1) - 1) * pageSize).Take(pageSize)
+            .Select(c => new { c.CompanyId, c.Name, c.Website, c.City, c.PhoneNumber, c.LifecycleStatus, c.CreatedOn })
+            .ToListAsync();
+        return Ok(new { total, page, pageSize, companies });
+    }
+
+    // POST /api/external/companies
+    [HttpPost("companies")]
+    [SwaggerOperation(Summary = "Crear empresa")]
+    public async Task<IActionResult> CreateCompany([FromBody] CompanyUpsertDto model)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+        if (string.IsNullOrWhiteSpace(model.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
+
+        var company = new Company
+        {
+            Name = model.Name, Website = model.Website, PhoneNumber = model.PhoneNumber,
+            Address = model.Address, City = model.City, State = model.State, PostalCode = model.PostalCode,
+            LifecycleStatus = model.LifecycleStatus ?? "Prospecto",
+            CreatedOn = DateTime.UtcNow, ModifiedOn = DateTime.UtcNow,
+        };
+        _context.Companies.Add(company);
+        await _context.SaveChangesAsync();
+        return Ok(new { company.CompanyId, created = true });
+    }
+
+    // PUT /api/external/companies/{id}
+    [HttpPut("companies/{id:int}")]
+    [SwaggerOperation(Summary = "Actualizar empresa (parcial)")]
+    public async Task<IActionResult> UpdateCompany(int id, [FromBody] CompanyUpsertDto model)
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        var companyIds = await GetAccountCompanyIdsAsync(key.AccountId);
+        if (!companyIds.Contains(id)) return NotFound(new { message = "Empresa no encontrada." });
+
+        var company = await _context.Companies.FindAsync(id);
+        if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+
+        if (!string.IsNullOrWhiteSpace(model.Name)) company.Name = model.Name;
+        company.Website         = model.Website         ?? company.Website;
+        company.PhoneNumber     = model.PhoneNumber     ?? company.PhoneNumber;
+        company.Address         = model.Address         ?? company.Address;
+        company.City            = model.City            ?? company.City;
+        company.State           = model.State            ?? company.State;
+        company.PostalCode      = model.PostalCode       ?? company.PostalCode;
+        company.LifecycleStatus = model.LifecycleStatus  ?? company.LifecycleStatus;
+        company.ModifiedOn      = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        return Ok(new { company.CompanyId, updated = true });
     }
 
     // ── Contactos ────────────────────────────────────────────────────────────
@@ -253,6 +474,21 @@ public class ExternalApiController : ControllerBase
             .ToListAsync();
         return Ok(variables);
     }
+
+    // GET /api/external/catalogs/lost-reasons
+    [HttpGet("catalogs/lost-reasons")]
+    [SwaggerOperation(Summary = "Motivos de pérdida válidos de la cuenta")]
+    public async Task<IActionResult> GetLostReasons()
+    {
+        var key = await ResolveKeyAsync();
+        if (key == null) return Unauthenticated();
+
+        var reasons = await _context.LeadLostReasons.AsNoTracking()
+            .Where(r => r.AccountId == key.AccountId)
+            .Select(r => new { r.LostReasonId, r.Description })
+            .ToListAsync();
+        return Ok(reasons);
+    }
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
@@ -283,4 +519,14 @@ public class ExternalUpdateLeadDto
 public class ExternalLeadStatusDto
 {
     public string Status { get; set; } = "Nuevo";
+}
+
+public class ExternalNoteDto
+{
+    public string? Text { get; set; }
+}
+
+public class ExternalTagDto
+{
+    public int TagId { get; set; }
 }
