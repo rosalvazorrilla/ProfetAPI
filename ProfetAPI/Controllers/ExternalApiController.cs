@@ -24,12 +24,14 @@ public class ExternalApiController : ControllerBase
     private readonly ApplicationDbContext _context;
     private readonly ApiKeyService _apiKeys;
     private readonly ITimelineLogger _timeline;
+    private readonly LeadAssignmentService _assignment;
 
-    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys, ITimelineLogger timeline)
+    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys, ITimelineLogger timeline, LeadAssignmentService assignment)
     {
         _context = context;
         _apiKeys = apiKeys;
         _timeline = timeline;
+        _assignment = assignment;
     }
 
     // ── Autenticación por API Key ───────────────────────────────────────────
@@ -79,6 +81,11 @@ public class ExternalApiController : ControllerBase
             Deleted        = false,
             CreatedOn      = DateTime.UtcNow,
         };
+        // La integración no tiene forma de saber quién debe llevarse el lead —
+        // se resuelve con el modo de asignación configurado en la cuenta (hoy:
+        // carrusel/round-robin), igual que cualquier otro canal de entrada.
+        lead.OwnerUserId = await _assignment.ResolveOwnerAsync(key.AccountId);
+
         _context.Leads.Add(lead);
         await _context.SaveChangesAsync();
 
@@ -87,6 +94,7 @@ public class ExternalApiController : ControllerBase
             leadId = lead.LeadId,
             name = lead.Name,
             status = lead.Status,
+            ownerUserId = lead.OwnerUserId,
             createdOn = lead.CreatedOn,
         });
     }

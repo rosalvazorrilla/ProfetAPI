@@ -33,6 +33,7 @@ public class LegacyLeadsApiController : ControllerBase
     private readonly INotificationService _notify;
     private readonly IScoringAiService _scoringAi;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly LeadAssignmentService _assignment;
 
     public LegacyLeadsApiController(
         ApplicationDbContext context,
@@ -40,7 +41,8 @@ public class LegacyLeadsApiController : ControllerBase
         PlaybookService playbooks,
         INotificationService notify,
         IScoringAiService scoringAi,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        LeadAssignmentService assignment)
     {
         _context = context;
         _automations = automations;
@@ -48,6 +50,7 @@ public class LegacyLeadsApiController : ControllerBase
         _notify = notify;
         _scoringAi = scoringAi;
         _scopeFactory = scopeFactory;
+        _assignment = assignment;
     }
 
     // POST /api/leadsapi — mismo path y método que el sistema viejo
@@ -89,15 +92,16 @@ public class LegacyLeadsApiController : ControllerBase
             CreatedOn      = DateTime.UtcNow,
         };
 
-        // Asignación directa si mandan un UserId válido de esta cuenta (el round-robin
-        // de campaña del sistema viejo no se replica — ya no aplica, el sistema nuevo
-        // no lo tiene como concepto; si no viene UserId, el lead queda sin asignar).
+        // Asignación directa si mandan un UserId válido de esta cuenta; si no,
+        // se resuelve con el modo de asignación configurado en la cuenta (carrusel).
         if (!string.IsNullOrWhiteSpace(model.UserId))
         {
             var validOwner = await _context.AccountInternalUsers
                 .AnyAsync(a => a.AccountId == account.AccountId && a.UserId == model.UserId);
             if (validOwner) lead.OwnerUserId = model.UserId;
         }
+        if (string.IsNullOrEmpty(lead.OwnerUserId))
+            lead.OwnerUserId = await _assignment.ResolveOwnerAsync(account.AccountId);
 
         _context.Leads.Add(lead);
         await _context.SaveChangesAsync();

@@ -25,14 +25,16 @@ public class WebhookReceiverController : ControllerBase
     private readonly IHttpClientFactory   _http;
     private readonly IConfiguration       _config;
     private readonly ILogger<WebhookReceiverController> _log;
+    private readonly LeadAssignmentService _assignment;
 
     public WebhookReceiverController(ApplicationDbContext db, IHttpClientFactory http,
-        IConfiguration config, ILogger<WebhookReceiverController> log)
+        IConfiguration config, ILogger<WebhookReceiverController> log, LeadAssignmentService assignment)
     {
         _db     = db;
         _http   = http;
         _config = config;
         _log    = log;
+        _assignment = assignment;
     }
 
     // ── Meta Lead Ads — Endpoint único (URL registrada en Meta for Developers) ─
@@ -360,6 +362,7 @@ public class WebhookReceiverController : ControllerBase
                         StageId        = wh.DestFunnelId,
                         Status         = wh.DestLeadStatus ?? "Nuevo",
                         OriginType     = "Inbound",
+                        OwnerUserId    = await _assignment.ResolveOwnerAsync(wh.AccountId),
                         Active         = true,
                         Deleted        = false,
                         CreatedOn      = DateTime.UtcNow,
@@ -476,6 +479,7 @@ public class WebhookReceiverController : ControllerBase
                     StageId        = wh.DestFunnelId,
                     Status         = wh.DestLeadStatus ?? "Nuevo",
                     OriginType     = "Inbound",
+                    OwnerUserId    = await _assignment.ResolveOwnerAsync(wh.AccountId),
                     Active         = true,
                     Deleted        = false,
                     CreatedOn      = DateTime.UtcNow,
