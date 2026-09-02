@@ -79,6 +79,18 @@
 --   de ASP.NET Identity) y SQL Server exige mismo largo para el FK.
 -- 2026-09-01 — API Keys de integración externa: tabla dbo.AccountApiKeys.
 --   EJECUTADA (confirmado con sys.tables).
+-- 2026-09-02 — Columnas/FK legacy en dbo.Leads que bloqueaban CUALQUIER
+--   insert nuevo de lead (no solo el compat de landing pages — afectaba
+--   tambien a POST /api/leads y al webhook custom): UpsellPotential y
+--   SellApproxAmount eran NOT NULL sin default y el modelo C# Lead.cs no
+--   las mapea, asi que EF Core siempre mandaba NULL -> error. Se pasaron a
+--   NULL-able. Ademas habia DOS foreign keys duplicados de Leads.CampaignId
+--   hacia la tabla legacy dbo.Campaigns (FK_dbo.Leads_dbo.Campaigns_Campaign_Id
+--   y FK_dbo.Leads_dbo.Campaigns_CampaignId) que Campaigns (solo 201 filas,
+--   tabla huerfana sin uso real) rechazaba con FK violation en cuanto
+--   CampaignId no coincidia con un Id real ahi -- se eliminaron los dos
+--   constraints (Campaigns en si NO se tocó, solo se quitó la referencia).
+--   EJECUTADA y probada end-to-end (lead 196486 creado con éxito).
 -- 2026-08-07 — Código de acceso del wizard (Customers.SetupAccessCode) +
 --   contraseña por correo al activar (UserProfiles.TempPasswordEncrypted).
 --   EJECUTADA (confirmado con sys.columns).
