@@ -22,17 +22,20 @@ public class DealsController : ControllerBase
     private readonly ProfetAPI.Services.AutomationExecutorService _automations;
     private readonly ProfetAPI.Services.ITimelineLogger _timeline;
     private readonly ProfetAPI.Services.PlaybookService _playbooks;
+    private readonly ProfetAPI.Services.INextActionService _nextAction;
 
     public DealsController(
         ApplicationDbContext context,
         ProfetAPI.Services.AutomationExecutorService automations,
         ProfetAPI.Services.ITimelineLogger timeline,
-        ProfetAPI.Services.PlaybookService playbooks)
+        ProfetAPI.Services.PlaybookService playbooks,
+        ProfetAPI.Services.INextActionService nextAction)
     {
         _context     = context;
         _automations = automations;
         _timeline    = timeline;
         _playbooks   = playbooks;
+        _nextAction  = nextAction;
     }
 
     private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -300,6 +303,27 @@ public class DealsController : ControllerBase
             totalCount,
             deals = deals.Select(d => ProjectDealStage(d, tagsByDeal)).ToList(),
         });
+    }
+
+    // GET /api/deals/{id}/next-action  — próxima mejor acción (IA)
+    [HttpGet("{id:int}/next-action")]
+    [SwaggerOperation(Summary = "Próxima mejor acción sugerida por IA para la oportunidad")]
+    public async Task<IActionResult> GetNextAction(int id)
+    {
+        var deal = await _context.Deals.AsNoTracking()
+            .Where(d => d.DealId == id)
+            .Select(d => new { d.AccountId }).FirstOrDefaultAsync();
+        if (deal == null) return NotFound(new { message = "Deal no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == deal.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        var r = await _nextAction.GetForDealAsync(id);
+        return Ok(new { available = r.Available, summary = r.Summary, action = r.Action, priority = r.Priority, reason = r.Reason });
     }
 
     // GET /api/deals/{id}  — detalle completo de un deal
