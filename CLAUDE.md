@@ -9,7 +9,7 @@ Migracion de un CRM B2B SaaS multi-tenant de .NET 4 a .NET 9. Backend REST API p
 - **Auth:** ASP.NET Identity + JWT Bearer (HMAC SHA256, 8h de validez)
 - **DB:** Azure SQL (SQL Server) — esquema altamente relacional y normalizado
 - **Docs:** Swagger/OpenAPI con comentarios XML + Postman-importable (siempre visible)
-- **Host:** Azure (profetapi.azurewebsites.net) | Dev: MAMP macOS puerto 5051/7277
+- **Host:** Azure (profet-prueba.azurewebsites.net — NO profetapi.azurewebsites.net, ese dominio no existe/no resuelve) | Dev: MAMP macOS puerto 5051/7277
 - **Frontend esperado:** Angular en localhost:4200
 
 ## Jerarquia Multi-Tenant (CRITICO)
