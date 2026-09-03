@@ -11,7 +11,7 @@ namespace ProfetAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "AdminGlobal,PM")]
+    [Authorize(Roles = "AdminGlobal,PM,Vendedor")]
     [SwaggerTag("Gestión de Clientes (Admin Global)")]
     public class CustomersController : ControllerBase
     {
@@ -68,7 +68,8 @@ namespace ProfetAPI.Controllers
                     null,
                     null,
                     c.SetupStep,
-                    null
+                    null,
+                    c.InitialDate
                 ))
                 .ToListAsync();
 
@@ -120,7 +121,8 @@ namespace ProfetAPI.Controllers
                     null,
                     null,
                     c.SetupStep,
-                    null
+                    null,
+                    c.InitialDate
                 ))
                 .FirstOrDefaultAsync();
 

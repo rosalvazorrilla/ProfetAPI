@@ -711,6 +711,115 @@ public class LeadsController : ControllerBase
         return Ok(new { leadId = lead.LeadId, updated = true });
     }
 
+    // GET /api/leads/{id}/variables — campos personalizados activos de la cuenta + su valor en este lead
+    [HttpGet("{id:long}/variables")]
+    [SwaggerOperation(Summary = "Variables (campos personalizados) de un prospecto")]
+    public async Task<IActionResult> GetVariables(long id)
+    {
+        var lead = await _context.Leads.AsNoTracking()
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
+            .Select(l => new { l.AccountId }).FirstOrDefaultAsync();
+        if (lead?.AccountId == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        var fields = await _context.AccountCustomFields
+            .Where(a => a.AccountId == lead.AccountId)
+            .Select(a => new
+            {
+                a.FieldId,
+                a.CustomFieldDefinition.FieldCode,
+                a.CustomFieldDefinition.FieldName,
+                a.CustomFieldDefinition.FieldType,
+                a.CustomFieldDefinition.Options,
+            })
+            .OrderBy(f => f.FieldName)
+            .ToListAsync();
+
+        var values = await _context.CustomFieldValues.AsNoTracking()
+            .Where(v => v.EntityType == "Lead" && v.EntityId == id)
+            .ToDictionaryAsync(v => v.FieldId, v => v.Value);
+
+        var result = fields.Select(f => new
+        {
+            f.FieldId, f.FieldCode, f.FieldName, f.FieldType,
+            options = string.IsNullOrEmpty(f.Options) ? null : f.Options.Split(',').Select(o => o.Trim()).ToArray(),
+            value = values.TryGetValue(f.FieldId, out var v) ? v : null,
+        });
+        return Ok(result);
+    }
+
+    // PUT /api/leads/{id}/variables — guarda los valores (parcial: solo se tocan los fieldId enviados)
+    [HttpPut("{id:long}/variables")]
+    [SwaggerOperation(Summary = "Guardar variables de un prospecto")]
+    public async Task<IActionResult> SaveVariables(long id, [FromBody] Dictionary<int, string?> values)
+    {
+        var lead = await _context.Leads
+            .Where(l => l.LeadId == id && (l.Deleted ?? false) == false)
+            .FirstOrDefaultAsync();
+        if (lead?.AccountId == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        // Solo campos realmente activados en la cuenta — no se puede guardar basura en un FieldId ajeno
+        var activeFieldIds = await _context.AccountCustomFields
+            .Where(a => a.AccountId == lead.AccountId)
+            .Select(a => a.FieldId).ToListAsync();
+
+        var existing = await _context.CustomFieldValues
+            .Where(v => v.EntityType == "Lead" && v.EntityId == id && values.Keys.Contains(v.FieldId))
+            .ToListAsync();
+
+        foreach (var (fieldId, value) in values)
+        {
+            if (!activeFieldIds.Contains(fieldId)) continue;
+            var row = existing.FirstOrDefault(v => v.FieldId == fieldId);
+            if (row == null)
+            {
+                _context.CustomFieldValues.Add(new CustomFieldValue { EntityType = "Lead", EntityId = id, FieldId = fieldId, Value = value });
+            }
+            else
+            {
+                row.Value = value;
+            }
+        }
+        await _context.SaveChangesAsync();
+        return Ok(new { saved = true });
+    }
+
+    // DELETE /api/leads/{id}  — soft delete (nunca se borra físicamente)
+    [HttpDelete("{id:long}")]
+    [SwaggerOperation(Summary = "Eliminar un prospecto (soft delete)")]
+    [SwaggerResponse(204, "Eliminado")]
+    [SwaggerResponse(404, "No encontrado")]
+    public async Task<IActionResult> DeleteLead(long id)
+    {
+        var lead = await _context.Leads.FirstOrDefaultAsync(l => l.LeadId == id);
+        if (lead == null || lead.Deleted == true) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        lead.Deleted = true;
+        lead.Active = false;
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+
     // PATCH /api/leads/{id}/status  — actualizar estatus
     [HttpPatch("{id:long}/status")]
     [SwaggerOperation(Summary = "Actualizar estatus del prospecto")]

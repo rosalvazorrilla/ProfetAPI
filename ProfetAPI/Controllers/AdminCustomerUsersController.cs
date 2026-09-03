@@ -14,7 +14,7 @@ namespace ProfetAPI.Controllers;
 /// </summary>
 [Route("api/admin/customers/{customerId}/users")]
 [ApiController]
-[Authorize(Roles = "AdminGlobal,PM")]
+[Authorize(Roles = "AdminGlobal,PM,Vendedor")]
 [SwaggerTag("Admin Global — Usuarios de Clientes")]
 public class AdminCustomerUsersController : ControllerBase
 {
