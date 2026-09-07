@@ -65,6 +65,15 @@ public class ProfileController : ControllerBase
 
         if (user == null) return NotFound(new { message = "Usuario no encontrado." });
 
+        // El helper PreferencesAsObject no es traducible a SQL sobre IQueryable —
+        // se trae el JSON crudo y se deserializa en memoria.
+        var rawPreferences = await _context.UserProfiles.AsNoTracking()
+            .Where(p => p.UserId == CurrentUserId)
+            .Select(p => p.Preferences)
+            .FirstOrDefaultAsync();
+        var hasSeenOnboarding = !string.IsNullOrEmpty(rawPreferences)
+            && (System.Text.Json.JsonSerializer.Deserialize<ProfetAPI.Dtos.UserPreferences>(rawPreferences)?.HasSeenOnboarding ?? false);
+
         // Account info
         var accountInfo = await _context.AccountInternalUsers
             .AsNoTracking()
@@ -99,6 +108,7 @@ public class ProfileController : ControllerBase
             customerId = user.CustomerId,
             userType   = user.UserType,
             role       = CurrentUserRole,
+            hasSeenOnboarding = hasSeenOnboarding,
             createdOn  = user.CreatedOn,
             firstName  = user.firstName,
             lastName   = user.lastName,
@@ -142,6 +152,27 @@ public class ProfileController : ControllerBase
             phone     = profile.Phone,
             updated   = true,
         });
+    }
+
+    // PATCH /api/profile/onboarding  — marcar visto/no visto el tour de bienvenida
+    [HttpPatch("onboarding")]
+    [SwaggerOperation(Summary = "Marcar el tour de bienvenida como visto (u omitido)")]
+    [SwaggerResponse(200, "Guardado")]
+    public async Task<IActionResult> SetOnboardingSeen([FromBody] SetOnboardingDto model)
+    {
+        var profile = await _context.UserProfiles.FindAsync(CurrentUserId);
+        if (profile == null)
+        {
+            profile = new UserProfile { UserId = CurrentUserId };
+            _context.UserProfiles.Add(profile);
+        }
+
+        var prefs = profile.PreferencesAsObject;
+        prefs.HasSeenOnboarding = model.Seen;
+        profile.PreferencesAsObject = prefs;
+
+        await _context.SaveChangesAsync();
+        return Ok(new { hasSeenOnboarding = model.Seen });
     }
 
     // PUT /api/profile/password  — cambiar contraseña
@@ -246,4 +277,9 @@ public class ChangePasswordDto
 {
     public string? CurrentPassword { get; set; }
     public string? NewPassword     { get; set; }
+}
+
+public class SetOnboardingDto
+{
+    public bool Seen { get; set; }
 }
