@@ -28,17 +28,15 @@ public class InboxController : ControllerBase
     private readonly IEmailService _emailService;
     private readonly IInboxAiService _ai;
     private readonly ITimelineLogger _timeline;
-    private readonly IHttpClientFactory _httpFactory;
+    private readonly IWhatsAppService _whatsapp;
     private readonly IHubContext<WhatsAppHub> _hub;
-
-    private const string TwoChatSendUrl = "https://api.p.2chat.io/open/whatsapp/send-message";
 
     public InboxController(
         ApplicationDbContext db, IEmailService emailService, IInboxAiService ai,
-        ITimelineLogger timeline, IHttpClientFactory httpFactory, IHubContext<WhatsAppHub> hub)
+        ITimelineLogger timeline, IWhatsAppService whatsapp, IHubContext<WhatsAppHub> hub)
     {
         _db = db; _emailService = emailService; _ai = ai;
-        _timeline = timeline; _httpFactory = httpFactory; _hub = hub;
+        _timeline = timeline; _whatsapp = whatsapp; _hub = hub;
     }
 
     private string? UserId  => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -185,19 +183,9 @@ public class InboxController : ControllerBase
         {
             if (string.IsNullOrWhiteSpace(dto.Text)) return BadRequest(new { message = "Escribe un mensaje." });
 
-            var customer = await _db.Customers.FindAsync(contact.CustomerId);
-            var apiKey     = customer?.TwoChatApiKey ?? "UAK6e31c29a-c640-4877-81d9-ad67113ec7b5";
-            var fromNumber = customer?.WhatsappNumber;
-            if (string.IsNullOrEmpty(fromNumber))
-                return BadRequest(new { message = "No hay número de WhatsApp configurado para este tenant." });
-
-            var client = _httpFactory.CreateClient();
-            client.DefaultRequestHeaders.Add("X-User-API-Key", apiKey);
-            var payload = new { to_number = contact.PhoneNumber, from_number = "+" + fromNumber.TrimStart('+'), text = dto.Text };
-            var resp = await client.PostAsync(TwoChatSendUrl,
-                new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json"));
-            if (!resp.IsSuccessStatusCode)
-                return StatusCode(502, new { message = "Error al enviar por WhatsApp." });
+            var (success, error) = await _whatsapp.SendAsync(contact.CustomerId, contact.PhoneNumber!, dto.Text);
+            if (!success)
+                return StatusCode(502, new { message = error ?? "Error al enviar por WhatsApp." });
 
             var msg = new MessagesWhatsapp
             {

@@ -97,11 +97,15 @@ Responde en español.
         int qOrder = 0;
         foreach (var q in req.Proposal.Questions)
         {
+            // El frontend solo sabe renderizar dos tipos: "SingleChoice" (con opciones)
+            // y "OpenText" (respuesta libre). La IA puede devolver texto libre en QuestionType
+            // (p.ej. "Opción múltiple"), así que normalizamos aquí en vez de confiar en el string
+            // exacto que propuso — si trae opciones es de opción única, si no, es texto libre.
             var question = new ScoringQuestion
             {
                 ScoringModelId = model.ScoringModelId,
                 QuestionText   = q.QuestionText,
-                QuestionType   = string.IsNullOrWhiteSpace(q.QuestionType) ? "SingleChoice" : q.QuestionType,
+                QuestionType   = q.Options.Count > 0 ? "SingleChoice" : "OpenText",
                 IsRequired     = q.IsRequired,
                 OrderPosition  = qOrder++,
             };

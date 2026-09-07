@@ -41,6 +41,10 @@ public class Deal
     public string? AdName { get; set; }
     public string? OriginType { get; set; }
 
+    /// <summary>Si es true, el despachador automático no manda mensajes de la secuencia
+    /// para este deal — las tareas siguen visibles y se completan a mano igual.</summary>
+    public bool SequencePaused { get; set; } = false;
+
     // Propiedades de navegación
     public virtual Account Account { get; set; } = null!;
     public virtual Company? Company { get; set; }

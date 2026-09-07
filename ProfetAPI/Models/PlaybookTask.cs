@@ -31,5 +31,13 @@ public class PlaybookTask
     /// <summary>Días de distancia para la fecha límite desde que se aplica el playbook (0 = mismo día).</summary>
     public int OffsetDays { get; set; } = 0;
 
+    /// <summary>"Manual" (por defecto, el vendedor lo hace él mismo) | "Automatico"
+    /// (solo válido con ActionType Email/WhatsApp — el despachador lo manda solo al vencer).</summary>
+    public string AutomationMode { get; set; } = "Manual";
+
+    /// <summary>Plantilla a usar cuando AutomationMode = "Automatico". Obligatoria en ese caso.</summary>
+    public int? TemplateId { get; set; }
+
     public virtual ActivityPlaybook Playbook { get; set; } = null!;
+    public virtual MessageTemplate? Template { get; set; }
 }

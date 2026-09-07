@@ -59,6 +59,10 @@ public class Lead
     /// <summary>'Manual' | 'AI' | 'Hybrid'.</summary>
     public string? ScoreSource { get; set; }
 
+    /// <summary>Si es true, el despachador automático no manda mensajes de la secuencia
+    /// para este lead — las tareas siguen visibles y se completan a mano igual.</summary>
+    public bool SequencePaused { get; set; } = false;
+
     // === NAVIGATION PROPERTIES ===
     public virtual Account? Account { get; set; }
     public virtual ApplicationUser? Owner { get; set; }

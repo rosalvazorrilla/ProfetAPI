@@ -464,7 +464,7 @@ public class LeadsController : ControllerBase
                 l.ProspectSource, l.AdName, l.InitialMessage,
                 l.AccountId, l.OwnerUserId, l.ContactId,
                 l.StageId, l.CampaignId, l.LifecycleStatus,
-                l.CreatedOn,
+                l.CreatedOn, l.SequencePaused,
             })
             .FirstOrDefaultAsync();
 
@@ -556,6 +556,7 @@ public class LeadsController : ControllerBase
             contactId      = lead.ContactId,
             lifecycleStatus = lead.LifecycleStatus,
             createdOn      = lead.CreatedOn,
+            sequencePaused = lead.SequencePaused,
             owner          = ownerObj,
             contact        = contactObj,
             tags,
@@ -818,6 +819,81 @@ public class LeadsController : ControllerBase
         lead.Active = false;
         await _context.SaveChangesAsync();
         return NoContent();
+    }
+
+    // PATCH /api/leads/{id}/sequence-pause  — pausar/reanudar el envío automático de la secuencia
+    [HttpPatch("{id:long}/sequence-pause")]
+    [SwaggerOperation(Summary = "Pausar o reanudar el envío automático de la secuencia para este lead")]
+    public async Task<IActionResult> SetSequencePause(long id, [FromBody] SequencePauseDto dto)
+    {
+        var lead = await _context.Leads.FirstOrDefaultAsync(l => l.LeadId == id && (l.Deleted ?? false) == false);
+        if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        lead.SequencePaused = dto.Paused;
+        await _context.SaveChangesAsync();
+        return Ok(new { lead.LeadId, lead.SequencePaused });
+    }
+
+    // POST /api/leads/bulk-message — seguimiento comercial masivo (leads viejos / sin respuesta)
+    [HttpPost("bulk-message")]
+    [SwaggerOperation(Summary = "Enviar una plantilla de Email/WhatsApp a varios leads a la vez")]
+    public async Task<IActionResult> BulkMessage([FromBody] BulkMessageDto dto)
+    {
+        if (dto.LeadIds == null || dto.LeadIds.Count == 0)
+            return BadRequest(new { message = "Selecciona al menos un prospecto." });
+
+        var template = await _context.MessageTemplates.FirstOrDefaultAsync(t => t.TemplateId == dto.TemplateId);
+        if (template == null || !template.IsActive) return BadRequest(new { message = "Plantilla no encontrada o inactiva." });
+
+        var leads = await _context.Leads
+            .Where(l => dto.LeadIds.Contains(l.LeadId) && (l.Deleted ?? false) == false)
+            .ToListAsync();
+        if (leads.Count == 0) return BadRequest(new { message = "No se encontraron prospectos válidos." });
+
+        if (!IsAdminGlobal)
+        {
+            var accountIds = leads.Select(l => l.AccountId).Distinct().ToList();
+            var ownAccounts = await _context.AccountInternalUsers
+                .Where(a => a.UserId == CurrentUserId && accountIds.Contains(a.AccountId))
+                .Select(a => a.AccountId).ToListAsync();
+            leads = leads.Where(l => l.AccountId.HasValue && ownAccounts.Contains(l.AccountId.Value)).ToList();
+        }
+        if (leads.Count == 0) return Forbid();
+
+        var leadIds = leads.Select(l => l.LeadId).ToList();
+        var templateId = template.TemplateId;
+
+        // Igual que AutomationExecutorService.FireAsync: se dispara en un scope propio,
+        // fuera del ciclo de vida de este request, con espera entre cada envío.
+        _ = Task.Run(async () =>
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db       = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            var dispatch = scope.ServiceProvider.GetRequiredService<ProfetAPI.Services.ISequenceDispatchService>();
+            var tl       = scope.ServiceProvider.GetRequiredService<ProfetAPI.Services.ITimelineLogger>();
+            var tpl      = await db.MessageTemplates.FindAsync(templateId);
+            if (tpl == null) return;
+
+            foreach (var leadId in leadIds)
+            {
+                var lead = await db.Leads.FindAsync(leadId);
+                if (lead == null || lead.AccountId == null) continue;
+                var (success, _) = await dispatch.SendToLeadAsync(lead, tpl);
+                if (success)
+                    await tl.LogAsync(lead.AccountId.Value, "Lead", lead.LeadId, "bulk_message",
+                        $"Seguimiento masivo enviado: \"{tpl.Name}\"");
+                await Task.Delay(TimeSpan.FromSeconds(5));
+            }
+        });
+
+        return Ok(new { queued = leads.Count });
     }
 
     // PATCH /api/leads/{id}/status  — actualizar estatus
@@ -1548,4 +1624,15 @@ public class ConvertToDealDto
     public string? ContactLastName  { get; set; }
     public string? ContactEmail     { get; set; }
     public string? ContactPhone     { get; set; }
+}
+
+public class SequencePauseDto
+{
+    public bool Paused { get; set; }
+}
+
+public class BulkMessageDto
+{
+    public List<long> LeadIds  { get; set; } = [];
+    public int         TemplateId { get; set; }
 }

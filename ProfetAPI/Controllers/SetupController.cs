@@ -1302,7 +1302,7 @@ namespace ProfetAPI.Controllers
                     {
                         ScoringModelId = scoringModel.ScoringModelId,
                         QuestionText = qDto.QuestionText,
-                        QuestionType = qDto.QuestionType,
+                        QuestionType = qDto.AnswerOptions.Count > 0 ? "SingleChoice" : "OpenText",
                         IsRequired = qDto.IsRequired,
                         OrderPosition = qDto.OrderPosition
                     };

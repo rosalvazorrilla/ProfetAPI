@@ -59,11 +59,37 @@ public class PlaybooksController : ControllerBase
                 {
                     t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId,
                     t.Description, t.Order, t.Priority, t.OffsetDays,
+                    t.AutomationMode, t.TemplateId,
                 }),
             })
             .ToListAsync();
 
         return Ok(playbooks);
+    }
+
+    // GET /api/playbooks/channel-status
+    [HttpGet("channel-status")]
+    [SwaggerOperation(Summary = "Si Email/WhatsApp están conectados para activar envío automático")]
+    public async Task<IActionResult> ChannelStatus([FromQuery] int? accountId)
+    {
+        var acId = await ResolveAccountId(accountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+
+        var account = await _db.Accounts.AsNoTracking()
+            .Where(a => a.AccountId == acId)
+            .Select(a => new { a.CustomerId, a.SmtpEnabled, a.SmtpIsVerified })
+            .FirstOrDefaultAsync();
+        if (account == null) return NotFound();
+
+        var emailConnected = account.SmtpEnabled == true && account.SmtpIsVerified == true;
+
+        var whatsappNumber = await _db.Customers.AsNoTracking()
+            .Where(c => c.Id == account.CustomerId)
+            .Select(c => c.WhatsappNumber)
+            .FirstOrDefaultAsync();
+        var whatsappConnected = !string.IsNullOrWhiteSpace(whatsappNumber);
+
+        return Ok(new { emailConnected, whatsappConnected });
     }
 
     // GET /api/playbooks/stages
@@ -116,6 +142,9 @@ public class PlaybooksController : ControllerBase
         if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
 
+        var stepError = await ValidateAutomationStepsAsync(acId.Value, req.Tasks ?? []);
+        if (stepError != null) return BadRequest(new { message = stepError });
+
         var playbook = new ActivityPlaybook
         {
             AccountId   = acId.Value,
@@ -149,6 +178,9 @@ public class PlaybooksController : ControllerBase
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
+
+        var stepError = await ValidateAutomationStepsAsync(acId.Value, req.Tasks ?? []);
+        if (stepError != null) return BadRequest(new { message = stepError });
 
         var playbook = await _db.ActivityPlaybooks
             .Include(p => p.Tasks)
@@ -266,17 +298,71 @@ public class PlaybooksController : ControllerBase
         {
             _db.PlaybookTasks.Add(new PlaybookTask
             {
-                PlaybookId    = playbookId,
-                TaskName      = (steps[i].TaskName ?? "").Trim(),
-                ActionType    = string.IsNullOrWhiteSpace(steps[i].ActionType) ? "Task" : steps[i].ActionType!,
-                TargetStageId = steps[i].TargetStageId,
-                StageId       = steps[i].StageId,
-                Description   = steps[i].Description?.Trim(),
-                Order         = i + 1,
-                Priority      = string.IsNullOrWhiteSpace(steps[i].Priority) ? "Media" : steps[i].Priority!,
-                OffsetDays    = Math.Max(0, steps[i].OffsetDays),
+                PlaybookId     = playbookId,
+                TaskName       = (steps[i].TaskName ?? "").Trim(),
+                ActionType     = string.IsNullOrWhiteSpace(steps[i].ActionType) ? "Task" : steps[i].ActionType!,
+                TargetStageId  = steps[i].TargetStageId,
+                StageId        = steps[i].StageId,
+                Description    = steps[i].Description?.Trim(),
+                Order          = i + 1,
+                Priority       = string.IsNullOrWhiteSpace(steps[i].Priority) ? "Media" : steps[i].Priority!,
+                OffsetDays     = Math.Max(0, steps[i].OffsetDays),
+                AutomationMode = steps[i].AutomationMode == "Automatico" ? "Automatico" : "Manual",
+                TemplateId     = steps[i].AutomationMode == "Automatico" ? steps[i].TemplateId : null,
             });
         }
+    }
+
+    /// <summary>
+    /// Antes de guardar un paso en modo "Automatico": el tipo de acción debe admitir
+    /// envío (Email/WhatsApp), debe traer una plantilla del mismo canal, y ese canal
+    /// debe estar conectado — si no, no se deja activar para no prometer un envío que
+    /// nunca va a salir.
+    /// </summary>
+    private async Task<string?> ValidateAutomationStepsAsync(int accountId, List<PlaybookStepRequest> steps)
+    {
+        var autoSteps = steps.Where(s => s.AutomationMode == "Automatico").ToList();
+        if (autoSteps.Count == 0) return null;
+
+        if (autoSteps.Any(s => s.ActionType != "Email" && s.ActionType != "WhatsApp"))
+            return "El envío automático solo aplica a pasos de tipo Email o WhatsApp.";
+
+        if (autoSteps.Any(s => s.TemplateId == null))
+            return "Elige una plantilla para cada paso en modo automático.";
+
+        var templateIds = autoSteps.Select(s => s.TemplateId!.Value).Distinct().ToList();
+        var templates = await _db.MessageTemplates
+            .Where(t => templateIds.Contains(t.TemplateId) && t.AccountId == accountId)
+            .ToDictionaryAsync(t => t.TemplateId);
+
+        foreach (var s in autoSteps)
+        {
+            if (!templates.TryGetValue(s.TemplateId!.Value, out var tpl))
+                return "Una de las plantillas elegidas no existe o no pertenece a esta cuenta.";
+            if (tpl.Channel != s.ActionType)
+                return $"La plantilla \"{tpl.Name}\" es de {tpl.Channel}, no coincide con el paso de {s.ActionType}.";
+        }
+
+        var account = await _db.Accounts.AsNoTracking()
+            .Where(a => a.AccountId == accountId)
+            .Select(a => new { a.CustomerId, a.SmtpEnabled, a.SmtpIsVerified })
+            .FirstOrDefaultAsync();
+        if (account == null) return "Cuenta no encontrada.";
+
+        if (autoSteps.Any(s => s.ActionType == "Email") && !(account.SmtpEnabled == true && account.SmtpIsVerified == true))
+            return "Conecta y verifica tu correo en Configuración antes de activar el envío automático de Email.";
+
+        if (autoSteps.Any(s => s.ActionType == "WhatsApp"))
+        {
+            var whatsappNumber = await _db.Customers.AsNoTracking()
+                .Where(c => c.Id == account.CustomerId)
+                .Select(c => c.WhatsappNumber)
+                .FirstOrDefaultAsync();
+            if (string.IsNullOrWhiteSpace(whatsappNumber))
+                return "Este cliente no tiene WhatsApp conectado — no se puede activar el envío automático de WhatsApp.";
+        }
+
+        return null;
     }
 
     private static object ToDto(ActivityPlaybook p) => new
@@ -286,6 +372,7 @@ public class PlaybooksController : ControllerBase
         {
             t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId,
             t.Description, t.Order, t.Priority, t.OffsetDays,
+            t.AutomationMode, t.TemplateId,
         }),
     };
 }
@@ -311,4 +398,6 @@ public class PlaybookStepRequest
     public string? Description   { get; set; }
     public string? Priority      { get; set; }
     public int     OffsetDays    { get; set; }
+    public string? AutomationMode { get; set; }  // "Manual" (default) | "Automatico"
+    public int?    TemplateId     { get; set; }
 }

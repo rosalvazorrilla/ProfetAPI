@@ -15,11 +15,13 @@ public class TasksController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly ProfetAPI.Services.PlaybookService _playbooks;
+    private readonly ProfetAPI.Services.ITimelineLogger _timeline;
 
-    public TasksController(ApplicationDbContext context, ProfetAPI.Services.PlaybookService playbooks)
+    public TasksController(ApplicationDbContext context, ProfetAPI.Services.PlaybookService playbooks, ProfetAPI.Services.ITimelineLogger timeline)
     {
         _context   = context;
         _playbooks = playbooks;
+        _timeline  = timeline;
     }
 
     private string? CurrentUserId   => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -265,20 +267,33 @@ public class TasksController : ControllerBase
         var valid = new[] { "Pendiente", "En progreso", "Completada", "Cancelada", "Omitida" };
         if (!valid.Contains(dto.Status)) return BadRequest($"Estado inválido. Valores permitidos: {string.Join(", ", valid)}");
 
-        if (dto.Status == "Omitida" && string.IsNullOrWhiteSpace(dto.Note))
-            return BadRequest(new { message = "Explica brevemente por qué se omite esta tarea." });
+        // "Omitida" (se saltó para poder avanzar) y "Cancelada" (ya no aplica) exigen
+        // motivo por igual — ambas cierran la tarea sin haberla completado de verdad.
+        if ((dto.Status == "Omitida" || dto.Status == "Cancelada") && string.IsNullOrWhiteSpace(dto.Note))
+            return BadRequest(new { message = dto.Status == "Cancelada"
+                ? "Explica brevemente por qué se cancela esta tarea."
+                : "Explica brevemente por qué se omite esta tarea." });
 
         var wasOpen = task.TaskStatus == "Pendiente" || task.TaskStatus == "En progreso";
 
         task.TaskStatus     = dto.Status;
         task.IsCompleted    = dto.Status == "Completada" || dto.Status == "Omitida";
-        task.ResolutionNote = dto.Status == "Omitida" ? dto.Note!.Trim() : task.ResolutionNote;
+        task.ResolutionNote = (dto.Status == "Omitida" || dto.Status == "Cancelada") ? dto.Note!.Trim() : task.ResolutionNote;
         await _context.SaveChangesAsync();
 
         // El plazo de la siguiente tarea de la secuencia arranca a contar desde ahora,
         // no desde que se generaron todas juntas.
         if (wasOpen && (dto.Status == "Completada" || dto.Status == "Omitida"))
             await _playbooks.AdvanceNextDueDateAsync(task);
+
+        // Dejar rastro en el timeline del lead/deal — una tarea suelta sin entidad
+        // asociada (creada desde el Calendario general) no tiene timeline a dónde loguear.
+        if (wasOpen && task.AccountId.HasValue && task.EntityType != null && task.EntityId.HasValue)
+        {
+            await _timeline.LogAsync(task.AccountId.Value, task.EntityType, task.EntityId.Value,
+                "task_status", $"Tarea \"{task.Subject}\": {dto.Status}",
+                detail: dto.Note, userId: CurrentUserId);
+        }
 
         return Ok(new { task.ActivityId, task.TaskStatus });
     }

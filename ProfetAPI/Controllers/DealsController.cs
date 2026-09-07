@@ -341,7 +341,7 @@ public class DealsController : ControllerBase
                 d.DealId, d.DealName, d.Status, d.DealType,
                 d.QuotedAmount, d.FinalAmount, d.CreatedOn, d.CloseDate,
                 d.ProspectSource, d.AdName, d.OriginType,
-                d.StageId, d.AccountId, d.CompanyId, d.PrimaryContactId,
+                d.StageId, d.AccountId, d.CompanyId, d.PrimaryContactId, d.SequencePaused,
                 stageName    = d.Stage != null ? d.Stage.Name  : null,
                 stageOrder   = d.Stage != null ? (int?)d.Stage.Order : null,
                 stageColor   = d.Stage != null ? d.Stage.Color : null,
@@ -420,6 +420,8 @@ public class DealsController : ControllerBase
             originType     = deal.OriginType,
             stageId        = deal.StageId,
             stageName      = deal.stageName,
+            accountId      = deal.AccountId,
+            sequencePaused = deal.SequencePaused,
             company = deal.CompanyId.HasValue
                 ? new { id = deal.CompanyId, name = deal.companyName }
                 : null,
@@ -461,6 +463,26 @@ public class DealsController : ControllerBase
             gatingMode,
             tasks = pending.Select(p => new { p.ActivityId, p.Subject, p.TaskStatus, p.DueDate }),
         });
+    }
+
+    // PATCH /api/deals/{id}/sequence-pause  — pausar/reanudar el envío automático de la secuencia
+    [HttpPatch("{id}/sequence-pause")]
+    [SwaggerOperation(Summary = "Pausar o reanudar el envío automático de la secuencia para este deal")]
+    public async Task<IActionResult> SetSequencePause(int id, [FromBody] SequencePauseDto dto)
+    {
+        var deal = await _context.Deals.FindAsync(id);
+        if (deal == null) return NotFound(new { message = "Deal no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == deal.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        deal.SequencePaused = dto.Paused;
+        await _context.SaveChangesAsync();
+        return Ok(new { deal.DealId, deal.SequencePaused });
     }
 
     // PATCH /api/deals/{id}/stage  — mover deal a otra etapa (drag & drop)

@@ -77,6 +77,9 @@ builder.Services.AddScoped<ProfetAPI.Services.TwoChatService>();
 // --- 5c. Servicio de Email ---
 builder.Services.AddScoped<ProfetAPI.Services.IEmailService, ProfetAPI.Services.EmailService>();
 
+// --- 5c-2. Servicio de envío de WhatsApp (extraído de InboxController) ---
+builder.Services.AddScoped<ProfetAPI.Services.IWhatsAppService, ProfetAPI.Services.WhatsAppService>();
+
 // --- 5d. Servicio de Webhooks Salientes ---
 builder.Services.AddScoped<ProfetAPI.Services.IWebhookDispatcherService, ProfetAPI.Services.WebhookDispatcherService>();
 
@@ -84,6 +87,10 @@ builder.Services.AddScoped<ProfetAPI.Services.IWebhookDispatcherService, ProfetA
 builder.Services.AddScoped<ProfetAPI.Services.MetaAdsService>();
 builder.Services.AddScoped<ProfetAPI.Services.AutomationExecutorService>();
 builder.Services.AddScoped<ProfetAPI.Services.PlaybookService>();
+
+// Envío automático real de secuencias (Email/WhatsApp) + el job diario que lo dispara
+builder.Services.AddScoped<ProfetAPI.Services.ISequenceDispatchService, ProfetAPI.Services.SequenceDispatchService>();
+builder.Services.AddHostedService<ProfetAPI.Services.SequenceAutomationJob>();
 builder.Services.AddScoped<ProfetAPI.Services.PmScopeService>();
 
 // Cifrado de secretos por cuenta (tokens de Meta, etc.) — Data Protection API
