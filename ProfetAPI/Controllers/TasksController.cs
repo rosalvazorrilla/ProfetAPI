@@ -119,6 +119,7 @@ public class TasksController : ControllerBase
                 a.EntityId,
                 a.StageId,
                 a.ResolutionNote,
+                a.ActionType,
                 OwnerUserId = a.OwnerUserId,
                 AssignedToUserId = a.AssignedToUserId,
                 AssignedToName = _context.UserProfiles

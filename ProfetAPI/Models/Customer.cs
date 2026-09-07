@@ -95,6 +95,11 @@ public class Customer
     [Column("MetaManagedByUs")]
     public bool MetaManagedByUs { get; set; } = false;
 
+    /// <summary>Zona horaria IANA del cliente (ej. "America/Mexico_City") — el despachador de
+    /// secuencias solo manda mensajes automáticos en horario hábil local. Null = se asume
+    /// America/Mexico_City.</summary>
+    public string? TimeZoneId { get; set; }
+
     // --- Propiedades de navegación ---
     // Un cliente tiene muchos usuarios y muchos equipos.
     public virtual ICollection<ApplicationUser> Users { get; set; } = new List<ApplicationUser>();

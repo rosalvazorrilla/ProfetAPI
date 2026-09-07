@@ -24,14 +24,19 @@ public interface ISequenceDispatchService
     Task<(bool success, string? error)> SendToLeadAsync(Lead lead, MessageTemplate template);
 }
 
+/// <summary>Cuántas fallas seguidas del envío automático de una misma tarea se toleran
+/// antes de dejar de reintentarla sola y avisarle a la cuenta.</summary>
 public class SequenceDispatchService(
     ApplicationDbContext db,
     IEmailService emailService,
     IWhatsAppService whatsAppService,
     ITimelineLogger timeline,
+    INotificationService notify,
     PlaybookService playbooks,
     ILogger<SequenceDispatchService> logger) : ISequenceDispatchService
 {
+    public const int MaxAutomationFailures = 3;
+
     public async Task<bool> SendTaskMessageAsync(Activity task, PlaybookTask step)
     {
         if (step.TemplateId == null) return false;
@@ -44,14 +49,14 @@ public class SequenceDispatchService(
         {
             var lead = await db.Leads.FirstOrDefaultAsync(l => l.LeadId == task.EntityId.Value);
             if (lead == null) return false;
-            result = await SendToLeadAsync(lead, template);
+            result = await SendAsync(lead.AccountId, template, BuildLeadFields(lead), lead.Email, lead.Phone, "Lead", lead.LeadId);
         }
         else if (task.EntityType == "Deal" && task.EntityId.HasValue)
         {
             var deal = await db.Deals.Include(d => d.PrimaryContact).Include(d => d.Company)
                 .FirstOrDefaultAsync(d => d.DealId == task.EntityId.Value);
             if (deal == null) return false;
-            result = await SendToDealAsync(deal, template);
+            result = await SendAsync(deal.AccountId, template, BuildDealFields(deal), deal.PrimaryContact?.Email, deal.PrimaryContact?.PhoneNumber, "Deal", deal.DealId);
         }
         else
         {
@@ -61,12 +66,23 @@ public class SequenceDispatchService(
         if (!result.success)
         {
             logger.LogWarning("Envío automático de secuencia falló (tarea {TaskId}): {Error}", task.ActivityId, result.error);
+            task.AutomationFailCount++;
+            if (task.AutomationFailCount >= MaxAutomationFailures)
+            {
+                task.ResolutionNote = $"Envío automático falló {task.AutomationFailCount} veces seguidas ({result.error}) — requiere revisión manual.";
+                if (task.AccountId.HasValue)
+                    await notify.NotifyAccountAsync(task.AccountId.Value,
+                        $"El envío automático de \"{task.Subject}\" falló y ya no se reintentará solo — revísalo.",
+                        entityType: task.EntityType, entityId: task.EntityId);
+            }
+            await db.SaveChangesAsync();
             return false;
         }
 
-        task.TaskStatus     = "Completada";
-        task.IsCompleted    = true;
-        task.ResolutionNote = "Enviado automáticamente por la secuencia";
+        task.TaskStatus          = "Completada";
+        task.IsCompleted         = true;
+        task.ResolutionNote      = "Enviado automáticamente por la secuencia";
+        task.AutomationFailCount = 0;
         await db.SaveChangesAsync();
         await playbooks.AdvanceNextDueDateAsync(task);
 
@@ -79,24 +95,23 @@ public class SequenceDispatchService(
         return true;
     }
 
-    public async Task<(bool success, string? error)> SendToLeadAsync(Lead lead, MessageTemplate template)
-    {
-        var fields = new Dictionary<string, string>
-        {
-            ["nombre"]   = lead.Name ?? "",
-            ["empresa"]  = lead.Company ?? "",
-            ["email"]    = lead.Email ?? "",
-            ["telefono"] = lead.Phone ?? "",
-            ["ciudad"]   = lead.City ?? "",
-            ["cargo"]    = lead.Position ?? "",
-        };
-        return await SendAsync(lead.AccountId, template, fields, lead.Email, lead.Phone);
-    }
+    public async Task<(bool success, string? error)> SendToLeadAsync(Lead lead, MessageTemplate template) =>
+        await SendAsync(lead.AccountId, template, BuildLeadFields(lead), lead.Email, lead.Phone, "Lead", lead.LeadId);
 
-    private async Task<(bool success, string? error)> SendToDealAsync(Deal deal, MessageTemplate template)
+    private static Dictionary<string, string> BuildLeadFields(Lead lead) => new()
+    {
+        ["nombre"]   = lead.Name ?? "",
+        ["empresa"]  = lead.Company ?? "",
+        ["email"]    = lead.Email ?? "",
+        ["telefono"] = lead.Phone ?? "",
+        ["ciudad"]   = lead.City ?? "",
+        ["cargo"]    = lead.Position ?? "",
+    };
+
+    private static Dictionary<string, string> BuildDealFields(Deal deal)
     {
         var contactName = $"{deal.PrimaryContact?.FirstName} {deal.PrimaryContact?.LastName}".Trim();
-        var fields = new Dictionary<string, string>
+        return new Dictionary<string, string>
         {
             ["nombre"]   = string.IsNullOrWhiteSpace(contactName) ? deal.DealName : contactName,
             ["empresa"]  = deal.Company?.Name ?? "",
@@ -105,10 +120,32 @@ public class SequenceDispatchService(
             ["ciudad"]   = "",
             ["cargo"]    = deal.PrimaryContact?.Position ?? "",
         };
-        return await SendAsync(deal.AccountId, template, fields, deal.PrimaryContact?.Email, deal.PrimaryContact?.PhoneNumber);
     }
 
     private async Task<(bool success, string? error)> SendAsync(
+        int? accountId, MessageTemplate template, Dictionary<string, string> fields, string? email, string? phone,
+        string entityType, long entityId)
+    {
+        var result = await SendCoreAsync(accountId, template, fields, email, phone);
+        if (accountId.HasValue)
+        {
+            db.AutomationSendLogs.Add(new AutomationSendLog
+            {
+                AccountId    = accountId.Value,
+                EntityType   = entityType,
+                EntityId     = entityId,
+                Channel      = template.Channel,
+                TemplateId   = template.TemplateId,
+                TemplateName = template.Name,
+                Success      = result.success,
+                Error        = result.error,
+            });
+            await db.SaveChangesAsync();
+        }
+        return result;
+    }
+
+    private async Task<(bool success, string? error)> SendCoreAsync(
         int? accountId, MessageTemplate template, Dictionary<string, string> fields, string? email, string? phone)
     {
         if (accountId == null) return (false, "Sin cuenta.");

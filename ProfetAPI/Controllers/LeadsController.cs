@@ -67,6 +67,8 @@ public class LeadsController : ControllerBase
         [FromQuery] string? ownerId,
         [FromQuery] int? tagId,
         [FromQuery] bool unassigned = false,
+        [FromQuery] bool noSequence = false,
+        [FromQuery] bool noReply = false,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50)
     {
@@ -122,6 +124,19 @@ public class LeadsController : ControllerBase
             query = query.Where(l => l.CreatedOn >= dateFrom.Value);
         if (dateTo.HasValue)
             query = query.Where(l => l.CreatedOn <= dateTo.Value.AddDays(1));
+
+        // Nunca tuvo una secuencia aplicada — cero tareas generadas desde un playbook.
+        if (noSequence)
+            query = query.Where(l => !_context.Activities.Any(a =>
+                a.EntityType == "Lead" && a.EntityId == l.LeadId && a.SourcePlaybookTaskId != null));
+
+        // Ya se le escribió por WhatsApp al menos una vez y nunca contestó — la única
+        // señal de "respuesta" que el sistema rastrea hoy es el mensaje entrante de
+        // WhatsApp (no hay tracking de respuestas de correo en todo el proyecto).
+        if (noReply)
+            query = query.Where(l =>
+                _context.MessagesWhatsapp.Any(m => m.Contact!.LeadId == l.LeadId && m.Direction == "outgoing") &&
+                !_context.MessagesWhatsapp.Any(m => m.Contact!.LeadId == l.LeadId && m.Direction == "incoming"));
 
         var total = await query.CountAsync();
 

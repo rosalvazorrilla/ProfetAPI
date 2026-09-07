@@ -94,32 +94,21 @@
 -- 2026-08-07 — Código de acceso del wizard (Customers.SetupAccessCode) +
 --   contraseña por correo al activar (UserProfiles.TempPasswordEncrypted).
 --   EJECUTADA (confirmado con sys.columns).
-
--- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- 2026-09-07 — Envío automático real de secuencias + seguimiento comercial masivo:
 --   tabla dbo.MessageTemplates, columnas AutomationMode/TemplateId en
---   dbo.PlaybookTasks, y SequencePaused en dbo.Leads/dbo.Deals. NO EJECUTADA
---   todavía — correr esto contra Azure SQL antes de probar en el ambiente
---   desplegado.
-CREATE TABLE dbo.MessageTemplates (
-    TemplateId INT IDENTITY PRIMARY KEY,
-    AccountId  INT NOT NULL,
-    Name       NVARCHAR(150) NOT NULL,
-    Channel    NVARCHAR(20)  NOT NULL,   -- 'Email' | 'WhatsApp'
-    Subject    NVARCHAR(300) NULL,
-    Body       NVARCHAR(MAX) NOT NULL,
-    IsActive   BIT NOT NULL DEFAULT 1,
-    CreatedOn  DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
-    CONSTRAINT FK_MessageTemplates_Account FOREIGN KEY (AccountId) REFERENCES dbo.Accounts(AccountId)
-);
+--   dbo.PlaybookTasks, y SequencePaused en dbo.Leads/dbo.Deals. EJECUTADA
+--   (corrida por Claude vía sqlcmd, confirmada con sys.tables/sys.columns).
+--   Texto completo del DDL: ver historial de conversación / git blame.
+-- 2026-09-07 (2) — Cierre de huecos del envío automático: ActionType +
+--   AutomationFailCount en dbo.Activities (ícono real por tarea + límite de
+--   reintentos), TimeZoneId en dbo.Customers (horario hábil local del
+--   despachador), y tabla dbo.AutomationSendLogs (auditoría de envíos).
+--   EJECUTADA (corrida por Claude vía sqlcmd, confirmada con sys.columns/
+--   sys.tables). Texto completo del DDL: ver historial de conversación / git
+--   blame.
 
-ALTER TABLE dbo.PlaybookTasks ADD AutomationMode NVARCHAR(20) NOT NULL DEFAULT 'Manual';
-ALTER TABLE dbo.PlaybookTasks ADD TemplateId INT NULL;
-ALTER TABLE dbo.PlaybookTasks ADD CONSTRAINT FK_PlaybookTasks_MessageTemplate
-    FOREIGN KEY (TemplateId) REFERENCES dbo.MessageTemplates(TemplateId);
-
-ALTER TABLE dbo.Leads ADD SequencePaused BIT NOT NULL DEFAULT 0;
-ALTER TABLE dbo.Deals ADD SequencePaused BIT NOT NULL DEFAULT 0;
+-- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
+-- (nada pendiente por ahora)
 
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
 -- 32 tablas huérfanas en Profet_new SÍ tienen datos reales (nadie las lee hoy;

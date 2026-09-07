@@ -160,6 +160,7 @@ public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> l
                 EntityId             = entityId,
                 StageId              = stageId,
                 SourcePlaybookTaskId = step.TaskId,
+                ActionType           = step.ActionType,
                 CreatedOn            = now,
             });
         }

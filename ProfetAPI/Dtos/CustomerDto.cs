@@ -48,12 +48,14 @@ namespace ProfetAPI.Dtos
         List<PmSummaryDto>? Pms = null,
         int SetupStep = 0,
         string? PlanName = null,
-        DateTime? CreatedAt = null
+        DateTime? CreatedAt = null,
+        string? TimeZoneId = null
     );
 
     public record UpdateCustomerDto(
         string Name,
         string Contact,
-        string? Phone
+        string? Phone,
+        string? TimeZoneId = null
     );
 }

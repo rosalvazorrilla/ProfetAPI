@@ -93,6 +93,7 @@ namespace ProfetAPI.Data
         public DbSet<ActivityPlaybook> ActivityPlaybooks { get; set; } = null!;
         public DbSet<PlaybookTask> PlaybookTasks { get; set; } = null!;
         public DbSet<MessageTemplate> MessageTemplates { get; set; } = null!;
+        public DbSet<AutomationSendLog> AutomationSendLogs { get; set; } = null!;
         public DbSet<Line> Lines { get; set; } = null!;
         public DbSet<UserLine> UserLines { get; set; } = null!;
         public DbSet<ProspectSource> ProspectSources { get; set; } = null!;

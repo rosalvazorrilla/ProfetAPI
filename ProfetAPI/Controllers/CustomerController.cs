@@ -69,7 +69,8 @@ namespace ProfetAPI.Controllers
                     null,
                     c.SetupStep,
                     null,
-                    c.InitialDate
+                    c.InitialDate,
+                    c.TimeZoneId
                 ))
                 .ToListAsync();
 
@@ -122,7 +123,8 @@ namespace ProfetAPI.Controllers
                     null,
                     c.SetupStep,
                     null,
-                    c.InitialDate
+                    c.InitialDate,
+                    c.TimeZoneId
                 ))
                 .FirstOrDefaultAsync();
 
@@ -372,10 +374,12 @@ namespace ProfetAPI.Controllers
             customer.Name = model.Name;
             customer.Contact = model.Contact;
             customer.Phone = model.Phone;
+            if (model.TimeZoneId != null) customer.TimeZoneId = model.TimeZoneId;
             await _context.SaveChangesAsync();
 
             return Ok(new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status,
-                $"{_frontendBaseUrl}/setup?token={customer.SetupToken}", customer.SetupToken, null, null));
+                $"{_frontendBaseUrl}/setup?token={customer.SetupToken}", customer.SetupToken, null, null,
+                TimeZoneId: customer.TimeZoneId));
         }
 
         // ── GET api/customers/5/subscription ────────────────────────────────

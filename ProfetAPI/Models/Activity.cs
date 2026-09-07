@@ -32,6 +32,12 @@ public class Activity
     public int? StageId { get; set; }
     /// <summary>Motivo cuando TaskStatus = "Omitida" (se resolvió distinto a como se definió, pero cuenta como cerrada).</summary>
     public string? ResolutionNote { get; set; }
+    /// <summary>Tipo de acción heredado del paso de la secuencia (Call/WhatsApp/Email/Meeting/Task/AdvanceStage) —
+    /// solo se usa para mostrar el ícono correcto en el checklist, nunca se infiere del texto del Subject.</summary>
+    public string? ActionType { get; set; }
+    /// <summary>Cuántas veces seguidas falló el envío automático de esta tarea. Al llegar a 3, el
+    /// despachador deja de reintentarla sola (queda para que el vendedor la resuelva a mano).</summary>
+    public int AutomationFailCount { get; set; } = 0;
 
     public virtual ApplicationUser? OwnerUser { get; set; }
     public virtual ApplicationUser? AssignedToUser { get; set; }
