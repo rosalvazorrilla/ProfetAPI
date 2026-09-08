@@ -106,6 +106,13 @@
 --   EJECUTADA (corrida por Claude vía sqlcmd, confirmada con sys.columns/
 --   sys.tables). Texto completo del DDL: ver historial de conversación / git
 --   blame.
+-- 2026-09-08 — Candado de plan/add-on para Secuencias: Feature 'SEQUENCE_AUTOMATION'
+--   (FeatureId=16) + AddOn 'Secuencias comerciales' (AddOnId=7, $499/mes — precio
+--   placeholder, ajustar en /admin/planes). Grandfathering aplicado: clientes que
+--   ya tenían al menos una secuencia (ActivityPlaybook) quedaron con el add-on en
+--   $0 sobre su suscripción activa (1 cliente al momento de correrlo). EJECUTADA
+--   (corrida por Claude vía sqlcmd). Texto completo del DDL: ver historial de
+--   conversación / git blame.
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- (nada pendiente por ahora)

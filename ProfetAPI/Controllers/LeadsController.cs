@@ -23,6 +23,7 @@ public class LeadsController : ControllerBase
     private readonly ProfetAPI.Services.INotificationService _notify;
     private readonly ProfetAPI.Services.INextActionService _nextAction;
     private readonly ProfetAPI.Services.ILeadRescoreTrigger _rescoreTrigger;
+    private readonly ProfetAPI.Services.IFeatureGateService _featureGate;
     private readonly IServiceScopeFactory _scopeFactory;
 
     public LeadsController(
@@ -35,6 +36,7 @@ public class LeadsController : ControllerBase
         ProfetAPI.Services.INotificationService notify,
         ProfetAPI.Services.INextActionService nextAction,
         ProfetAPI.Services.ILeadRescoreTrigger rescoreTrigger,
+        ProfetAPI.Services.IFeatureGateService featureGate,
         IServiceScopeFactory scopeFactory)
     {
         _context        = context;
@@ -46,6 +48,7 @@ public class LeadsController : ControllerBase
         _notify         = notify;
         _nextAction     = nextAction;
         _rescoreTrigger = rescoreTrigger;
+        _featureGate    = featureGate;
         _scopeFactory   = scopeFactory;
     }
 
@@ -881,6 +884,17 @@ public class LeadsController : ControllerBase
             leads = leads.Where(l => l.AccountId.HasValue && ownAccounts.Contains(l.AccountId.Value)).ToList();
         }
         if (leads.Count == 0) return Forbid();
+
+        // Seguimiento masivo vive dentro del candado de "Secuencias" — todas las cuentas
+        // de los leads seleccionados deben tener la función contratada.
+        var gateAccountIds = leads.Where(l => l.AccountId.HasValue).Select(l => l.AccountId!.Value).Distinct().ToList();
+        var gateCustomerIds = await _context.Accounts.Where(a => gateAccountIds.Contains(a.AccountId))
+            .Select(a => a.CustomerId).Distinct().ToListAsync();
+        foreach (var custId in gateCustomerIds)
+        {
+            if (!await _featureGate.HasFeatureAsync(custId, "SEQUENCE_AUTOMATION"))
+                return StatusCode(403, new { message = "Esta función no está incluida en tu plan.", featureCode = "SEQUENCE_AUTOMATION" });
+        }
 
         // Igual que en las secuencias: el envío a leads/deals sale por el correo PROPIO
         // de la cuenta, nunca por el SMTP global de Profet — si no está conectado, se

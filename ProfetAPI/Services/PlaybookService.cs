@@ -11,9 +11,20 @@ namespace ProfetAPI.Services;
 /// (fase Deal). También resuelve el gating: si hay tareas abiertas y el modo es "Block",
 /// no se debe dejar convertir/avanzar.
 /// </summary>
-public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> logger)
+public class PlaybookService(ApplicationDbContext db, IFeatureGateService featureGate, ILogger<PlaybookService> logger)
 {
     private static readonly string[] OpenStatuses = ["Pendiente", "En progreso"];
+    private const string SequenceFeatureCode = "SEQUENCE_AUTOMATION";
+
+    /// <summary>Se dispara solo, sin que el usuario haya pedido nada explícitamente (al
+    /// crear un lead / mover un deal) — por eso aquí no se rechaza con un error, solo se
+    /// omite en silencio si la cuenta no tiene la función contratada.</summary>
+    private async Task<bool> HasFeatureForAccountAsync(int accountId)
+    {
+        var customerId = await db.Accounts.AsNoTracking()
+            .Where(a => a.AccountId == accountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        return await featureGate.HasFeatureAsync(customerId, SequenceFeatureCode);
+    }
 
     /// <summary>
     /// Genera las tareas de fase Lead (StageId == null) del playbook predeterminado
@@ -22,6 +33,7 @@ public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> l
     /// </summary>
     public async Task ApplyDefaultAsync(int accountId, long leadId, string? ownerUserId)
     {
+        if (!await HasFeatureForAccountAsync(accountId)) return;
         var playbook = await GetDefaultPlaybookAsync(accountId);
         if (playbook == null) return;
         await GenerateTasksAsync(playbook, accountId, "Lead", leadId, ownerUserId, stageId: null);
@@ -32,6 +44,7 @@ public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> l
     /// </summary>
     public async Task<int> ApplyPlaybookAsync(int playbookId, int accountId, long leadId, string? ownerUserId)
     {
+        if (!await HasFeatureForAccountAsync(accountId)) return 0;
         var playbook = await db.ActivityPlaybooks
             .Where(p => p.PlaybookId == playbookId && p.AccountId == accountId && !p.Deleted)
             .Include(p => p.Tasks)
@@ -48,6 +61,7 @@ public class PlaybookService(ApplicationDbContext db, ILogger<PlaybookService> l
     /// </summary>
     public async Task ApplyDealStageAsync(int accountId, int dealId, int stageId, string? ownerUserId)
     {
+        if (!await HasFeatureForAccountAsync(accountId)) return;
         var playbook = await GetDefaultPlaybookAsync(accountId);
         if (playbook == null) return;
 

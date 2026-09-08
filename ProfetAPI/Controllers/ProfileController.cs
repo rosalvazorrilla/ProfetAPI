@@ -100,6 +100,11 @@ public class ProfileController : ControllerBase
                 .FirstOrDefaultAsync();
         }
 
+        var effectiveCustomerId = user.CustomerId ?? accountInfo?.customerId;
+        var activeFeatureCodes = effectiveCustomerId.HasValue
+            ? await GetActiveFeatureCodesAsync(effectiveCustomerId.Value)
+            : new List<string>();
+
         return Ok(new
         {
             userId     = user.Id,
@@ -109,6 +114,7 @@ public class ProfileController : ControllerBase
             userType   = user.UserType,
             role       = CurrentUserRole,
             hasSeenOnboarding = hasSeenOnboarding,
+            activeFeatureCodes = activeFeatureCodes,
             createdOn  = user.CreatedOn,
             firstName  = user.firstName,
             lastName   = user.lastName,
@@ -173,6 +179,31 @@ public class ProfileController : ControllerBase
 
         await _context.SaveChangesAsync();
         return Ok(new { hasSeenOnboarding = model.Seen });
+    }
+
+    /// <summary>Todos los FeatureCode activos para un customer — incluidos en su Plan
+    /// o desbloqueados por un AddOn comprado — para que el frontend arme candados
+    /// de cualquier función sin pedirle uno por uno al backend.</summary>
+    private async Task<List<string>> GetActiveFeatureCodesAsync(int customerId)
+    {
+        var sub = await _context.Subscriptions
+            .Where(s => s.CustomerId == customerId && (s.Status == "Active" || s.Status == "Trialing"))
+            .Select(s => new { s.SubscriptionId, s.PlanId })
+            .FirstOrDefaultAsync();
+        if (sub == null) return new List<string>();
+
+        var planCodes = await _context.PlanFeatures
+            .Where(pf => pf.PlanId == sub.PlanId)
+            .Select(pf => pf.Feature.FeatureCode)
+            .ToListAsync();
+
+        var now = DateTime.UtcNow;
+        var addonCodes = await _context.CustomerPurchasedAddOns
+            .Where(p => p.SubscriptionId == sub.SubscriptionId && (p.ExpiryDate == null || p.ExpiryDate > now))
+            .Select(p => p.AddOn.Feature.FeatureCode)
+            .ToListAsync();
+
+        return planCodes.Concat(addonCodes).Distinct().ToList();
     }
 
     // PUT /api/profile/password  — cambiar contraseña

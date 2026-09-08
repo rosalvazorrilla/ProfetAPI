@@ -19,15 +19,19 @@ public class PlaybooksController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
     private readonly PlaybookService _playbooks;
+    private readonly IFeatureGateService _featureGate;
+
+    private const string SequenceFeatureCode = "SEQUENCE_AUTOMATION";
 
     private string? UserId   => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
     private string? UserRole => User.FindFirst(ClaimTypes.Role)?.Value;
     private bool IsAdmin     => UserRole == "AdminGlobal";
 
-    public PlaybooksController(ApplicationDbContext db, PlaybookService playbooks)
+    public PlaybooksController(ApplicationDbContext db, PlaybookService playbooks, IFeatureGateService featureGate)
     {
-        _db        = db;
-        _playbooks = playbooks;
+        _db          = db;
+        _playbooks   = playbooks;
+        _featureGate = featureGate;
     }
 
     private async Task<int?> ResolveAccountId(int? accountId)
@@ -41,6 +45,16 @@ public class PlaybooksController : ControllerBase
         return accountId;
     }
 
+    /// <summary>Toda la sección de Secuencias vive detrás de este candado — AdminGlobal
+    /// gestionando el catálogo de otro cliente igual necesita que ESE cliente lo tenga.</summary>
+    private async Task<IActionResult?> RequireSequenceFeatureAsync(int accountId)
+    {
+        var customerId = await _db.Accounts.AsNoTracking()
+            .Where(a => a.AccountId == accountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        if (await _featureGate.HasFeatureAsync(customerId, SequenceFeatureCode)) return null;
+        return StatusCode(403, new { message = "Esta función no está incluida en tu plan.", featureCode = SequenceFeatureCode });
+    }
+
     // GET /api/playbooks
     [HttpGet]
     [SwaggerOperation(Summary = "Listar playbooks de la cuenta")]
@@ -48,6 +62,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate1) return gate1;
 
         var playbooks = await _db.ActivityPlaybooks
             .Where(p => p.AccountId == acId && !p.Deleted)
@@ -74,6 +89,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate2) return gate2;
 
         var account = await _db.Accounts.AsNoTracking()
             .Where(a => a.AccountId == acId)
@@ -123,6 +139,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate3) return gate3;
 
         var playbook = await _db.ActivityPlaybooks
             .Where(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted)
@@ -140,6 +157,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate4) return gate4;
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
 
         var stepError = await ValidateAutomationStepsAsync(acId.Value, req.Tasks ?? []);
@@ -177,6 +195,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate5) return gate5;
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
 
         var stepError = await ValidateAutomationStepsAsync(acId.Value, req.Tasks ?? []);
@@ -212,6 +231,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate6) return gate6;
 
         var playbook = await _db.ActivityPlaybooks
             .FirstOrDefaultAsync(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted);
@@ -232,6 +252,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate7) return gate7;
 
         var playbook = await _db.ActivityPlaybooks
             .FirstOrDefaultAsync(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted);
@@ -252,6 +273,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate8) return gate8;
 
         var playbook = await _db.ActivityPlaybooks
             .FirstOrDefaultAsync(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted);
@@ -270,6 +292,7 @@ public class PlaybooksController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate9) return gate9;
 
         var lead = await _db.Leads.FirstOrDefaultAsync(l => l.LeadId == leadId && l.AccountId == acId);
         if (lead == null) return NotFound(new { message = "Lead no encontrado en la cuenta." });

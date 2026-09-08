@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProfetAPI.Data;
 using ProfetAPI.Models;
+using ProfetAPI.Services;
 using Swashbuckle.AspNetCore.Annotations;
 
 namespace ProfetAPI.Controllers;
@@ -16,12 +17,18 @@ namespace ProfetAPI.Controllers;
 public class MessageTemplatesController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
+    private readonly IFeatureGateService _featureGate;
+    private const string SequenceFeatureCode = "SEQUENCE_AUTOMATION";
 
     private string? UserId   => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     private string? UserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
     private bool IsAdmin     => UserRole == "AdminGlobal";
 
-    public MessageTemplatesController(ApplicationDbContext db) => _db = db;
+    public MessageTemplatesController(ApplicationDbContext db, IFeatureGateService featureGate)
+    {
+        _db = db;
+        _featureGate = featureGate;
+    }
 
     private async Task<int?> ResolveAccountId(int? accountId)
     {
@@ -34,6 +41,14 @@ public class MessageTemplatesController : ControllerBase
         return accountId;
     }
 
+    private async Task<IActionResult?> RequireSequenceFeatureAsync(int accountId)
+    {
+        var customerId = await _db.Accounts.AsNoTracking()
+            .Where(a => a.AccountId == accountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        if (await _featureGate.HasFeatureAsync(customerId, SequenceFeatureCode)) return null;
+        return StatusCode(403, new { message = "Esta función no está incluida en tu plan.", featureCode = SequenceFeatureCode });
+    }
+
     // GET /api/message-templates?channel=Email
     [HttpGet]
     [SwaggerOperation(Summary = "Listar plantillas de la cuenta")]
@@ -41,6 +56,7 @@ public class MessageTemplatesController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate1) return gate1;
 
         var q = _db.MessageTemplates.Where(t => t.AccountId == acId);
         if (!string.IsNullOrWhiteSpace(channel)) q = q.Where(t => t.Channel == channel);
@@ -74,6 +90,7 @@ public class MessageTemplatesController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate2) return gate2;
         var error = ValidateRequest(req);
         if (error != null) return BadRequest(new { message = error });
 
@@ -98,6 +115,7 @@ public class MessageTemplatesController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate3) return gate3;
         var error = ValidateRequest(req);
         if (error != null) return BadRequest(new { message = error });
 
@@ -120,6 +138,7 @@ public class MessageTemplatesController : ControllerBase
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate4) return gate4;
 
         var template = await _db.MessageTemplates.FirstOrDefaultAsync(t => t.TemplateId == id && t.AccountId == acId);
         if (template == null) return NotFound();

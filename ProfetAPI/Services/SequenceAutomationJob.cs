@@ -84,12 +84,25 @@ public class SequenceAutomationJob(
         var pausedLeads = (await db.Leads.Where(l => leadIds.Contains(l.LeadId) && l.SequencePaused).Select(l => l.LeadId).ToListAsync(ct)).ToHashSet();
         var pausedDeals = (await db.Deals.Where(d => dealIds.Contains(d.DealId) && d.SequencePaused).Select(d => d.DealId).ToListAsync(ct)).ToHashSet();
 
-        // AccountId -> zona horaria del Customer dueño de esa cuenta (una sola consulta).
+        // AccountId -> zona horaria y cliente dueño de esa cuenta (una sola consulta).
         var accountIds = dueTasks.Where(t => t.AccountId.HasValue).Select(t => t.AccountId!.Value).Distinct().ToList();
-        var accountTimeZones = await db.Accounts.AsNoTracking()
+        var accountInfo = await db.Accounts.AsNoTracking()
             .Where(a => accountIds.Contains(a.AccountId))
-            .Select(a => new { a.AccountId, TimeZoneId = a.Customer.TimeZoneId })
-            .ToDictionaryAsync(a => a.AccountId, a => a.TimeZoneId, ct);
+            .Select(a => new { a.AccountId, a.CustomerId, TimeZoneId = a.Customer.TimeZoneId })
+            .ToListAsync(ct);
+        var accountTimeZones = accountInfo.ToDictionary(a => a.AccountId, a => a.TimeZoneId);
+
+        // Cuentas cuyo cliente ya no tiene la función contratada (canceló el add-on, etc.)
+        // — no se manda nada aunque la tarea siga ahí, es una defensa extra sobre el gate
+        // que ya vive en los controladores.
+        var featureGate = scope.ServiceProvider.GetRequiredService<IFeatureGateService>();
+        var gatedOutAccounts = new HashSet<int>();
+        foreach (var custId in accountInfo.Select(a => a.CustomerId).Distinct())
+        {
+            if (!await featureGate.HasFeatureAsync(custId, "SEQUENCE_AUTOMATION"))
+                foreach (var a in accountInfo.Where(a => a.CustomerId == custId))
+                    gatedOutAccounts.Add(a.AccountId);
+        }
 
         var sent = 0;
         var skippedOffHours = 0;
@@ -97,6 +110,7 @@ public class SequenceAutomationJob(
         {
             if (ct.IsCancellationRequested) break;
             if (task.SourcePlaybookTaskId == null || !steps.TryGetValue(task.SourcePlaybookTaskId.Value, out var step)) continue;
+            if (task.AccountId.HasValue && gatedOutAccounts.Contains(task.AccountId.Value)) continue;
             if (task.EntityType == "Lead" && task.EntityId.HasValue && pausedLeads.Contains(task.EntityId.Value)) continue;
             if (task.EntityType == "Deal" && task.EntityId.HasValue && pausedDeals.Contains((int)task.EntityId.Value)) continue;
 

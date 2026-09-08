@@ -447,6 +447,81 @@ namespace ProfetAPI.Controllers
             return Ok(dto);
         }
 
+        // ── GET api/customers/5/addons/available ────────────────────────────
+
+        private string? CurrentUserId => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        private bool IsAdminGlobalUser => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value == "AdminGlobal";
+
+        /// <summary>AdminGlobal puede activar el add-on de cualquier cliente; cualquier otro
+        /// usuario solo puede autoservirse el de SU PROPIO cliente — nunca el de otro.</summary>
+        private async Task<bool> CanManageOwnOrIsAdminAsync(int customerId)
+        {
+            if (IsAdminGlobalUser) return true;
+            var ownCustomerId = await _context.Users.Where(u => u.Id == CurrentUserId).Select(u => u.CustomerId).FirstOrDefaultAsync()
+                ?? await _context.AccountInternalUsers.Where(a => a.UserId == CurrentUserId).Select(a => (int?)a.Account.CustomerId).FirstOrDefaultAsync();
+            return ownCustomerId == customerId;
+        }
+
+        [HttpGet("{id}/addons/available")]
+        [SwaggerOperation(Summary = "AddOns que este cliente todavía no tiene contratados, con su precio")]
+        public async Task<IActionResult> GetAvailableAddOns(int id)
+        {
+            if (!await CanManageOwnOrIsAdminAsync(id)) return Forbid();
+
+            var subscription = await _context.Subscriptions
+                .Where(s => s.CustomerId == id && (s.Status == "Active" || s.Status == "Trialing"))
+                .Select(s => new { s.SubscriptionId })
+                .FirstOrDefaultAsync();
+            if (subscription == null) return Ok(Array.Empty<object>());
+
+            var purchasedAddOnIds = await _context.CustomerPurchasedAddOns
+                .Where(p => p.SubscriptionId == subscription.SubscriptionId)
+                .Select(p => p.AddOnId).ToListAsync();
+
+            var available = await _context.AddOns
+                .Where(a => !purchasedAddOnIds.Contains(a.AddOnId))
+                .Select(a => new { a.AddOnId, a.Name, a.Description, a.Price, a.BillingCycle, featureCode = a.Feature.FeatureCode })
+                .ToListAsync();
+
+            return Ok(available);
+        }
+
+        // ── POST api/customers/5/addons/3/activate ──────────────────────────
+
+        [HttpPost("{id}/addons/{addonId}/activate")]
+        [SwaggerOperation(
+            Summary = "Activar un AddOn para el cliente",
+            Description = "AdminGlobal puede activarlo para cualquier cliente; el propio cliente solo puede activar el suyo — sin pasarela de pago, el aviso de que sube la factura se muestra antes en el frontend."
+        )]
+        public async Task<IActionResult> ActivateAddOn(int id, int addonId)
+        {
+            if (!await CanManageOwnOrIsAdminAsync(id)) return Forbid();
+
+            var subscription = await _context.Subscriptions
+                .FirstOrDefaultAsync(s => s.CustomerId == id && (s.Status == "Active" || s.Status == "Trialing"));
+            if (subscription == null) return BadRequest(new { message = "El cliente no tiene una suscripción activa." });
+
+            var addOn = await _context.AddOns.FirstOrDefaultAsync(a => a.AddOnId == addonId);
+            if (addOn == null) return NotFound(new { message = "AddOn no encontrado." });
+
+            var alreadyHas = await _context.CustomerPurchasedAddOns
+                .AnyAsync(p => p.SubscriptionId == subscription.SubscriptionId && p.AddOnId == addonId
+                    && (p.ExpiryDate == null || p.ExpiryDate > DateTime.UtcNow));
+            if (alreadyHas) return Ok(new { activated = true, alreadyActive = true });
+
+            _context.CustomerPurchasedAddOns.Add(new CustomerPurchasedAddOn
+            {
+                SubscriptionId = subscription.SubscriptionId,
+                AddOnId        = addonId,
+                PricePaid      = addOn.Price,
+                Quantity       = 1,
+                PurchaseDate   = DateTime.UtcNow,
+            });
+            await _context.SaveChangesAsync();
+
+            return Ok(new { activated = true, alreadyActive = false });
+        }
+
         // ── PUT api/customers/5/subscription ────────────────────────────────
 
         [HttpPut("{id}/subscription")]
