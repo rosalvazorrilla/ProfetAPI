@@ -882,6 +882,28 @@ public class LeadsController : ControllerBase
         }
         if (leads.Count == 0) return Forbid();
 
+        // Igual que en las secuencias: el envío a leads/deals sale por el correo PROPIO
+        // de la cuenta, nunca por el SMTP global de Profet — si no está conectado, se
+        // avisa de una vez en vez de dejar que cada envío falle en silencio de a uno.
+        var leadAccountIds = leads.Where(l => l.AccountId.HasValue).Select(l => l.AccountId!.Value).Distinct().ToList();
+        if (template.Channel == "Email")
+        {
+            var unverifiedCount = await _context.Accounts
+                .CountAsync(a => leadAccountIds.Contains(a.AccountId)
+                    && (a.SmtpEnabled != true || a.SmtpIsVerified != true || string.IsNullOrEmpty(a.SmtpHost)));
+            if (unverifiedCount > 0)
+                return BadRequest(new { message = "La cuenta no tiene su correo propio conectado y verificado — configúralo en Configuración > Correo antes de enviar." });
+        }
+        else if (template.Channel == "WhatsApp")
+        {
+            var customerIds = await _context.Accounts.Where(a => leadAccountIds.Contains(a.AccountId))
+                .Select(a => a.CustomerId).Distinct().ToListAsync();
+            var missingWhatsapp = await _context.Customers
+                .CountAsync(c => customerIds.Contains(c.Id) && string.IsNullOrEmpty(c.WhatsappNumber));
+            if (missingWhatsapp > 0)
+                return BadRequest(new { message = "Este cliente no tiene WhatsApp conectado — no se puede enviar." });
+        }
+
         var leadIds = leads.Select(l => l.LeadId).ToList();
         var templateId = template.TemplateId;
 

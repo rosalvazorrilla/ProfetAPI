@@ -154,16 +154,19 @@ public class SequenceDispatchService(
         {
             if (string.IsNullOrWhiteSpace(email)) return (false, "El prospecto no tiene correo.");
 
+            // Todo lo relacionado a leads/deals sale por el correo PROPIO de la cuenta —
+            // nunca por el SMTP global de Profet (ese es solo para correos del sistema:
+            // bienvenida, notificaciones, recordatorios). Si la cuenta no lo tiene
+            // conectado y verificado, se falla claro en vez de mandar por un host ajeno.
             var account = await db.Accounts.AsNoTracking().FirstOrDefaultAsync(a => a.AccountId == accountId);
-            SmtpConfig? config = null;
-            if (account?.SmtpEnabled == true && account.SmtpIsVerified == true && !string.IsNullOrWhiteSpace(account.SmtpHost))
-            {
-                config = new SmtpConfig(
-                    Host: account.SmtpHost!, Port: account.SmtpPort ?? 587,
-                    User: account.SmtpUser ?? "", Password: account.SmtpPassword ?? "",
-                    FromAddress: account.SmtpFromAddress ?? "", FromName: account.SmtpFromName ?? "CRM",
-                    EnableSsl: account.SmtpEnableSsl ?? true, IsCustom: true);
-            }
+            if (account?.SmtpEnabled != true || account.SmtpIsVerified != true || string.IsNullOrWhiteSpace(account.SmtpHost))
+                return (false, "Esta cuenta no tiene su correo propio conectado y verificado — configúralo en Configuración > Correo antes de enviar automáticamente.");
+
+            var config = new SmtpConfig(
+                Host: account.SmtpHost!, Port: account.SmtpPort ?? 587,
+                User: account.SmtpUser ?? "", Password: account.SmtpPassword ?? "",
+                FromAddress: account.SmtpFromAddress ?? "", FromName: account.SmtpFromName ?? "CRM",
+                EnableSsl: account.SmtpEnableSsl ?? true, IsCustom: true);
 
             return await emailService.SendAsync(email, Interpolate(template.Subject ?? "", fields), Interpolate(template.Body, fields), config: config);
         }
