@@ -27,15 +27,22 @@ public class ProfileController : ControllerBase
     private string? CurrentUserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
     private bool IsAdminGlobal => CurrentUserRole == "AdminGlobal";
 
-    /// <summary>AdminGlobal puede pasar accountId por query (no pertenece a ninguna cuenta); el resto siempre resuelve la suya propia.</summary>
+    /// <summary>AdminGlobal puede pasar accountId por query (no pertenece a ninguna cuenta). El resto
+    /// puede pertenecer a varias cuentas del mismo cliente (PM/Manager) — si pasan un accountId que
+    /// SÍ es una de las suyas, se respeta; si no, se usa la primera. Antes esto ignoraba el query
+    /// param por completo y siempre devolvía la primera cuenta del usuario.</summary>
     private async Task<int?> ResolveAccountId(int? accountId)
     {
         if (IsAdminGlobal) return accountId;
-        return await _context.AccountInternalUsers
+
+        var userAccountIds = await _context.AccountInternalUsers
             .AsNoTracking()
             .Where(a => a.UserId == CurrentUserId)
-            .Select(a => (int?)a.AccountId)
-            .FirstOrDefaultAsync();
+            .Select(a => a.AccountId)
+            .ToListAsync();
+
+        if (accountId.HasValue && userAccountIds.Contains(accountId.Value)) return accountId;
+        return userAccountIds.Count > 0 ? userAccountIds[0] : (int?)null;
     }
 
     // GET /api/profile  — datos del usuario logueado
