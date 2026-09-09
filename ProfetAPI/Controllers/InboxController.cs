@@ -58,7 +58,7 @@ public class InboxController : ControllerBase
     // GET /api/inbox?accountId=&filter=all|unread
     [HttpGet]
     [SwaggerOperation(Summary = "Listar conversaciones (WhatsApp + última actividad de email)")]
-    public async Task<IActionResult> List([FromQuery] int? accountId, [FromQuery] string filter = "all")
+    public async Task<IActionResult> List([FromQuery] int? accountId, [FromQuery] string filter = "all", [FromQuery] string? ownerId = null)
     {
         var acId = await ResolveAccountId(accountId);
         if (acId == null) return NotFound(new { message = "Sin cuenta." });
@@ -91,10 +91,19 @@ public class InboxController : ControllerBase
             .Select(g => new { LeadId = g.Key, At = g.Max(e => e.SentAt) })
             .ToDictionaryAsync(x => x.LeadId, x => x.At);
 
-        var tierByLead = leadIds.Count == 0 ? new Dictionary<long, (string?, string?)>() : (await _db.Leads.AsNoTracking()
+        var leadInfo = leadIds.Count == 0 ? new Dictionary<long, (string? TierName, string? TierColor, string? OwnerId, string? OwnerName)>() : (await _db.Leads.AsNoTracking()
             .Where(l => leadIds.Contains(l.LeadId))
-            .Select(l => new { l.LeadId, TierName = l.Tier != null ? l.Tier.Name : null, TierColor = l.Tier != null ? l.Tier.Color : null })
-            .ToListAsync()).ToDictionary(x => x.LeadId, x => (x.TierName, x.TierColor));
+            .Select(l => new
+            {
+                l.LeadId,
+                TierName = l.Tier != null ? l.Tier.Name : null,
+                TierColor = l.Tier != null ? l.Tier.Color : null,
+                OwnerId = l.OwnerUserId,
+                OwnerName = l.Owner != null
+                    ? (l.Owner.UserProfile != null ? (l.Owner.UserProfile.FirstName + " " + l.Owner.UserProfile.LastName).Trim() : l.Owner.UserName)
+                    : null,
+            })
+            .ToListAsync()).ToDictionary(x => x.LeadId, x => (x.TierName, x.TierColor, x.OwnerId, x.OwnerName));
 
         var result = contacts.Select(c =>
         {
@@ -103,7 +112,7 @@ public class InboxController : ControllerBase
             DateTime? emailAt = c.LeadId.HasValue && lastEmailByLead.TryGetValue((int)c.LeadId.Value, out var ea) ? ea : null;
             var lastAt = new[] { waAt, emailAt }.Where(d => d.HasValue).Select(d => d!.Value).DefaultIfEmpty().Max();
             var lastChannel = emailAt.HasValue && (!waAt.HasValue || emailAt > waAt) ? "email" : "whatsapp";
-            tierByLead.TryGetValue(c.LeadId ?? -1, out var tier);
+            leadInfo.TryGetValue(c.LeadId ?? -1, out var info);
 
             return new InboxConversationDto
             {
@@ -117,11 +126,14 @@ public class InboxController : ControllerBase
                 LastMessagePreview = wa?.Text,
                 LastAt             = lastAt == default ? null : lastAt,
                 UnreadCount        = unreadWa.TryGetValue(c.Id, out var uc) ? uc : 0,
-                TierName           = tier.Item1,
-                TierColor          = tier.Item2,
+                TierName           = info.TierName,
+                TierColor          = info.TierColor,
+                OwnerId            = info.OwnerId,
+                OwnerName          = info.OwnerName,
             };
         })
         .Where(c => filter != "unread" || c.UnreadCount > 0)
+        .Where(c => string.IsNullOrEmpty(ownerId) || c.OwnerId == ownerId)
         .OrderByDescending(c => c.LastAt)
         .ToList();
 

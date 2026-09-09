@@ -14,6 +14,8 @@ public class InboxConversationDto
     public int       UnreadCount      { get; set; }
     public string?   TierName         { get; set; }
     public string?   TierColor        { get; set; }
+    public string?   OwnerId          { get; set; }
+    public string?   OwnerName        { get; set; }
 }
 
 public class InboxMessageDto
