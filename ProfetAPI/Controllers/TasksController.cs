@@ -120,6 +120,7 @@ public class TasksController : ControllerBase
                 a.StageId,
                 a.ResolutionNote,
                 a.ActionType,
+                a.SourcePlaybookTaskId,
                 OwnerUserId = a.OwnerUserId,
                 AssignedToUserId = a.AssignedToUserId,
                 AssignedToName = _context.UserProfiles
@@ -153,7 +154,7 @@ public class TasksController : ControllerBase
         var enriched = data.Select(a => new
         {
             a.ActivityId, a.Subject, a.Notes, a.Priority, a.TaskStatus, a.DueDate, a.CreatedOn,
-            a.EntityType, a.EntityId, a.StageId, a.ResolutionNote, a.ActionType,
+            a.EntityType, a.EntityId, a.StageId, a.ResolutionNote, a.ActionType, a.SourcePlaybookTaskId,
             a.OwnerUserId, a.AssignedToUserId, a.AssignedToName, a.OwnerName,
             EntityName = a.EntityType == "Lead" && a.EntityId.HasValue ? leadNames.GetValueOrDefault(a.EntityId.Value)
                        : a.EntityType == "Deal" && a.EntityId.HasValue ? dealNames.GetValueOrDefault((int)a.EntityId.Value)

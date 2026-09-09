@@ -282,6 +282,20 @@ public class LeadsController : ControllerBase
                 .ToDictionaryAsync(x => x.LeadId, x => x.LastOn)
             : new Dictionary<long, DateTime>();
 
+        // Pasos de secuencia (Activities generadas por un playbook) por lead —
+        // mismo criterio que noSequence, pero mostrando cuántos van completados
+        // en vez de solo "tiene o no tiene". No se limita a fase Lead (StageId
+        // null) — si el lead ya se convirtió en Deal y trae pasos de esa etapa
+        // arrastrados, también cuentan como parte de "su secuencia".
+        var sequenceStatsByLead = leadIdInts.Any()
+            ? await _context.Activities
+                .Where(a => a.ActivityType == "Task" && a.EntityType == "Lead"
+                         && leadIdInts.Contains((int)a.EntityId!) && a.SourcePlaybookTaskId != null)
+                .GroupBy(a => a.EntityId!.Value)
+                .Select(g => new SequenceStats(g.Key, g.Count(), g.Count(a => a.TaskStatus == "Completada")))
+                .ToDictionaryAsync(x => x.LeadId, x => x)
+            : new Dictionary<long, SequenceStats>();
+
         var result = leads.Select(l =>
         {
             // Contact fields (prefer Contact record, fall back to Lead flat fields)
@@ -319,6 +333,7 @@ public class LeadsController : ControllerBase
 
             tagsByLead.TryGetValue((int)l.LeadId, out var tags);
             lastMovementByLead.TryGetValue(l.LeadId, out var lastMovementOn);
+            sequenceStatsByLead.TryGetValue(l.LeadId, out var seqStats);
             return new
             {
                 leadId         = l.LeadId,
@@ -338,6 +353,9 @@ public class LeadsController : ControllerBase
                 tags           = tags ?? new List<object>(),
                 // null si el lead nunca tuvo ningún evento de timeline registrado
                 lastMovementOn = lastMovementOn == default ? (DateTime?)null : lastMovementOn,
+                hasSequence          = seqStats != null,
+                sequenceTasksTotal     = seqStats?.Total ?? 0,
+                sequenceTasksCompleted = seqStats?.Completed ?? 0,
             };
         });
 
@@ -1643,6 +1661,8 @@ public class LeadsController : ControllerBase
 }
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
+
+public record SequenceStats(long LeadId, int Total, int Completed);
 
 public class CreateLeadDto
 {
