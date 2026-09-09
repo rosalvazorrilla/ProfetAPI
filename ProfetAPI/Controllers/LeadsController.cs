@@ -272,6 +272,16 @@ public class LeadsController : ControllerBase
                     t.Tag.FontColor
                 }).ToList<object>());
 
+        // Último movimiento (timeline) por lead — mismo criterio que noMovementDays,
+        // pero aquí se muestra como columna en vez de usarse solo para filtrar.
+        var lastMovementByLead = leadIdInts.Any()
+            ? await _context.TimelineEvents
+                .Where(t => t.EntityType == "Lead" && leadIdInts.Contains((int)t.EntityId))
+                .GroupBy(t => t.EntityId)
+                .Select(g => new { LeadId = g.Key, LastOn = g.Max(t => t.CreatedOn) })
+                .ToDictionaryAsync(x => x.LeadId, x => x.LastOn)
+            : new Dictionary<long, DateTime>();
+
         var result = leads.Select(l =>
         {
             // Contact fields (prefer Contact record, fall back to Lead flat fields)
@@ -308,6 +318,7 @@ public class LeadsController : ControllerBase
             }
 
             tagsByLead.TryGetValue((int)l.LeadId, out var tags);
+            lastMovementByLead.TryGetValue(l.LeadId, out var lastMovementOn);
             return new
             {
                 leadId         = l.LeadId,
@@ -325,6 +336,8 @@ public class LeadsController : ControllerBase
                 ownerName,
                 ownerInitials,
                 tags           = tags ?? new List<object>(),
+                // null si el lead nunca tuvo ningún evento de timeline registrado
+                lastMovementOn = lastMovementOn == default ? (DateTime?)null : lastMovementOn,
             };
         });
 
