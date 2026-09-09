@@ -87,6 +87,28 @@ public class PlaybooksController : ControllerBase
         return Ok(playbooks);
     }
 
+    // GET /api/playbooks/accounts?accountId=&customerId=
+    [HttpGet("accounts")]
+    [SwaggerOperation(Summary = "Todas las cuentas del cliente, para elegir a cuáles aplica una secuencia")]
+    public async Task<IActionResult> ListAccounts([FromQuery] int? accountId, [FromQuery] int? customerId)
+    {
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return Ok(Array.Empty<object>());
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate9) return gate9;
+
+        // A propósito TODAS las cuentas del cliente, no solo las del usuario que
+        // consulta — una secuencia es del cliente completo, así que cualquiera
+        // con el candado de plan activo debe poder asignarla a cualquier cuenta
+        // del cliente, esté o no dado de alta como staff de esa cuenta puntual.
+        var accounts = await _db.Accounts.AsNoTracking()
+            .Where(a => a.CustomerId == custId.Value && a.Status == "Activo")
+            .OrderBy(a => a.Name)
+            .Select(a => new { a.AccountId, a.Name })
+            .ToListAsync();
+
+        return Ok(accounts);
+    }
+
     // GET /api/playbooks/channel-status
     [HttpGet("channel-status")]
     [SwaggerOperation(Summary = "Si Email/WhatsApp están conectados para activar envío automático en una cuenta puntual")]
