@@ -184,9 +184,11 @@ namespace ProfetAPI.Controllers
                 .Where(r => accounts.Select(a => a.AccountId).Contains(r.AccountId) && r.IsActive)
                 .ToListAsync();
 
-            var accountPlaybooks = await _context.ActivityPlaybooks
-                .Include(p => p.Tasks)
-                .Where(p => accounts.Select(a => a.AccountId).Contains(p.AccountId) && p.IsDefault && !p.Deleted)
+            var accountIds = accounts.Select(a => a.AccountId).ToList();
+            var accountPlaybookAssignments = await _context.PlaybookAccountAssignments
+                .Include(paa => paa.Playbook).ThenInclude(p => p.Tasks)
+                .Where(paa => accountIds.Contains(paa.AccountId) && paa.IsDefault
+                           && !paa.Playbook.Deleted)
                 .ToListAsync();
 
             var accountChecklist = accounts.Select(a =>
@@ -194,7 +196,7 @@ namespace ProfetAPI.Controllers
                 var funnel = a.Funnels.FirstOrDefault();
                 var scoring = scoringModels.FirstOrDefault(sm => sm.AccountId == a.AccountId);
                 var lostReasonCount = accountLostReasons.Count(r => r.AccountId == a.AccountId);
-                var playbook = accountPlaybooks.FirstOrDefault(p => p.AccountId == a.AccountId);
+                var playbook = accountPlaybookAssignments.FirstOrDefault(paa => paa.AccountId == a.AccountId)?.Playbook;
                 var fieldCount = accountCustomFields.Count(acf => acf.AccountId == a.AccountId);
                 var userCount = a.InternalUsers.Count;
                 var industryCount = accountIndustries.Count(ai => ai.AccountId == a.AccountId);
@@ -1379,8 +1381,9 @@ namespace ProfetAPI.Controllers
             if (!await AccountBelongsToCustomer(accountId, customer.Id))
                 return NotFound(new { message = "Cuenta no encontrada." });
 
-            var playbook = await _context.ActivityPlaybooks
-                .Where(p => p.AccountId == accountId && p.IsDefault && !p.Deleted)
+            var playbook = await _context.PlaybookAccountAssignments
+                .Where(a => a.AccountId == accountId && a.IsDefault && !a.Playbook.Deleted)
+                .Select(a => a.Playbook)
                 .Include(p => p.Tasks)
                 .FirstOrDefaultAsync();
             if (playbook == null) return NoContent();
@@ -1407,14 +1410,22 @@ namespace ProfetAPI.Controllers
                 return NotFound(new { message = "Cuenta no encontrada." });
             if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
 
-            var playbook = await _context.ActivityPlaybooks
-                .Include(p => p.Tasks)
-                .FirstOrDefaultAsync(p => p.AccountId == accountId && p.IsDefault && !p.Deleted);
+            var assignment = await _context.PlaybookAccountAssignments
+                .Include(a => a.Playbook).ThenInclude(p => p.Tasks)
+                .FirstOrDefaultAsync(a => a.AccountId == accountId && a.IsDefault && !a.Playbook.Deleted);
+            var playbook = assignment?.Playbook;
 
             if (playbook == null)
             {
-                playbook = new ActivityPlaybook { AccountId = accountId, Name = req.Name.Trim(), IsActive = true, IsDefault = true, Deleted = false };
+                playbook = new ActivityPlaybook { CustomerId = customer.Id, AccountId = accountId, Name = req.Name.Trim(), IsActive = true, IsDefault = true, Deleted = false };
                 _context.ActivityPlaybooks.Add(playbook);
+                await _context.SaveChangesAsync();
+                _context.PlaybookAccountAssignments.Add(new PlaybookAccountAssignment
+                {
+                    PlaybookId = playbook.PlaybookId,
+                    AccountId  = accountId,
+                    IsDefault  = true,
+                });
                 await _context.SaveChangesAsync();
             }
             else

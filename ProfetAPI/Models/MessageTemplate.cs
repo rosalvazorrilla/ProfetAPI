@@ -11,7 +11,13 @@ public class MessageTemplate
 {
     [Key]
     public int TemplateId { get; set; }
+
+    /// <summary>Legacy: cuenta donde se creó originalmente. Ya no se usa para resolver
+    /// pertenencia — ahora es por cliente (CustomerId), para que sirva en cualquiera de
+    /// las cuentas asignadas a una secuencia compartida.</summary>
     public int AccountId { get; set; }
+
+    public int CustomerId { get; set; }
 
     [Required, StringLength(150)]
     public string Name { get; set; } = null!;

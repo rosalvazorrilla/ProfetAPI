@@ -9,12 +9,12 @@ using System.Security.Claims;
 
 namespace ProfetAPI.Controllers;
 
-// ── CRUD de playbooks (secuencias de tareas por cuenta) ──────────────────────────
+// ── CRUD de playbooks (secuencias de tareas por cliente, asignables a una o varias cuentas) ──
 
 [Route("api/playbooks")]
 [ApiController]
 [Authorize]
-[SwaggerTag("CRM — Playbooks (secuencias de tareas por cuenta)")]
+[SwaggerTag("CRM — Playbooks (secuencias de tareas por cliente)")]
 public class PlaybooksController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
@@ -34,42 +34,47 @@ public class PlaybooksController : ControllerBase
         _featureGate = featureGate;
     }
 
-    private async Task<int?> ResolveAccountId(int? accountId)
+    /// <summary>AdminGlobal puede pasar customerId directo, o accountId (se resuelve su
+    /// Account.CustomerId) — el resto siempre resuelve el customer de su propia cuenta.</summary>
+    private async Task<int?> ResolveCustomerId(int? accountId, int? customerId)
     {
-        if (IsAdmin && accountId.HasValue) return accountId;
-        if (!IsAdmin)
-            return await _db.AccountInternalUsers
-                .Where(u => u.UserId == UserId)
-                .Select(u => (int?)u.AccountId)
-                .FirstOrDefaultAsync();
-        return accountId;
+        if (IsAdmin)
+        {
+            if (customerId.HasValue) return customerId;
+            if (accountId.HasValue)
+                return await _db.Accounts.AsNoTracking().Where(a => a.AccountId == accountId)
+                    .Select(a => (int?)a.CustomerId).FirstOrDefaultAsync();
+            return null;
+        }
+        return await _db.AccountInternalUsers.AsNoTracking()
+            .Where(u => u.UserId == UserId)
+            .Select(u => (int?)u.Account.CustomerId)
+            .FirstOrDefaultAsync();
     }
 
-    /// <summary>Toda la sección de Secuencias vive detrás de este candado — AdminGlobal
-    /// gestionando el catálogo de otro cliente igual necesita que ESE cliente lo tenga.</summary>
-    private async Task<IActionResult?> RequireSequenceFeatureAsync(int accountId)
+    /// <summary>Toda la sección de Secuencias vive detrás de este candado.</summary>
+    private async Task<IActionResult?> RequireSequenceFeatureAsync(int customerId)
     {
-        var customerId = await _db.Accounts.AsNoTracking()
-            .Where(a => a.AccountId == accountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
         if (await _featureGate.HasFeatureAsync(customerId, SequenceFeatureCode)) return null;
         return StatusCode(403, new { message = "Esta función no está incluida en tu plan.", featureCode = SequenceFeatureCode });
     }
 
     // GET /api/playbooks
     [HttpGet]
-    [SwaggerOperation(Summary = "Listar playbooks de la cuenta")]
-    public async Task<IActionResult> List([FromQuery] int? accountId)
+    [SwaggerOperation(Summary = "Listar secuencias del cliente, con las cuentas a las que aplica cada una")]
+    public async Task<IActionResult> List([FromQuery] int? accountId, [FromQuery] int? customerId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate1) return gate1;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate1) return gate1;
 
         var playbooks = await _db.ActivityPlaybooks
-            .Where(p => p.AccountId == acId && !p.Deleted)
-            .OrderByDescending(p => p.IsDefault).ThenBy(p => p.Name)
+            .Where(p => p.CustomerId == custId && !p.Deleted)
+            .OrderBy(p => p.Name)
             .Select(p => new
             {
-                p.PlaybookId, p.Name, p.Description, p.IsActive, p.IsDefault, p.GatingMode,
+                p.PlaybookId, p.Name, p.Description, p.IsActive, p.GatingMode,
+                accounts = p.AccountAssignments.Select(a => new { a.AccountId, accountName = a.Account.Name, a.IsDefault }),
                 tasks = p.Tasks.OrderBy(t => t.Order).Select(t => new
                 {
                     t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId,
@@ -84,15 +89,13 @@ public class PlaybooksController : ControllerBase
 
     // GET /api/playbooks/channel-status
     [HttpGet("channel-status")]
-    [SwaggerOperation(Summary = "Si Email/WhatsApp están conectados para activar envío automático")]
+    [SwaggerOperation(Summary = "Si Email/WhatsApp están conectados para activar envío automático en una cuenta puntual")]
     public async Task<IActionResult> ChannelStatus([FromQuery] int? accountId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate2) return gate2;
+        if (accountId == null) return NotFound(new { message = "Falta accountId." });
 
         var account = await _db.Accounts.AsNoTracking()
-            .Where(a => a.AccountId == acId)
+            .Where(a => a.AccountId == accountId)
             .Select(a => new { a.CustomerId, a.SmtpEnabled, a.SmtpIsVerified })
             .FirstOrDefaultAsync();
         if (account == null) return NotFound();
@@ -110,14 +113,13 @@ public class PlaybooksController : ControllerBase
 
     // GET /api/playbooks/stages
     [HttpGet("stages")]
-    [SwaggerOperation(Summary = "Etapas del embudo de la cuenta (para el paso 'Avanzar a etapa')")]
+    [SwaggerOperation(Summary = "Etapas del embudo de una cuenta puntual (para el paso 'Avanzar a etapa')")]
     public async Task<IActionResult> Stages([FromQuery] int? accountId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return Ok(Array.Empty<object>());
+        if (accountId == null) return Ok(Array.Empty<object>());
 
         var funnel = await _db.Funnels.AsNoTracking()
-            .Where(f => f.AccountId == acId)
+            .Where(f => f.AccountId == accountId)
             .Select(f => (int?)f.FunnelId)
             .FirstOrDefaultAsync();
 
@@ -134,16 +136,17 @@ public class PlaybooksController : ControllerBase
 
     // GET /api/playbooks/{id}
     [HttpGet("{id:int}")]
-    [SwaggerOperation(Summary = "Obtener un playbook con sus pasos")]
-    public async Task<IActionResult> Get(int id, [FromQuery] int? accountId)
+    [SwaggerOperation(Summary = "Obtener una secuencia con sus pasos y cuentas asignadas")]
+    public async Task<IActionResult> Get(int id, [FromQuery] int? accountId, [FromQuery] int? customerId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate3) return gate3;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate2) return gate2;
 
         var playbook = await _db.ActivityPlaybooks
-            .Where(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted)
+            .Where(p => p.PlaybookId == id && p.CustomerId == custId && !p.Deleted)
             .Include(p => p.Tasks)
+            .Include(p => p.AccountAssignments).ThenInclude(a => a.Account)
             .FirstOrDefaultAsync();
 
         if (playbook == null) return NotFound();
@@ -152,24 +155,28 @@ public class PlaybooksController : ControllerBase
 
     // POST /api/playbooks
     [HttpPost]
-    [SwaggerOperation(Summary = "Crear playbook")]
-    public async Task<IActionResult> Create([FromQuery] int? accountId, [FromBody] SavePlaybookRequest req)
+    [SwaggerOperation(Summary = "Crear secuencia y asignarla a una o varias cuentas del cliente")]
+    public async Task<IActionResult> Create([FromQuery] int? accountId, [FromQuery] int? customerId, [FromBody] SavePlaybookRequest req)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate4) return gate4;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate3) return gate3;
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
 
-        var stepError = await ValidateAutomationStepsAsync(acId.Value, req.Tasks ?? []);
+        var accountIds = (req.AccountIds ?? []).Distinct().ToList();
+        var accountError = await ValidateAccountsAsync(custId.Value, accountIds, req.Tasks ?? []);
+        if (accountError != null) return BadRequest(new { message = accountError });
+
+        var stepError = await ValidateAutomationStepsAsync(custId.Value, req.Tasks ?? []);
         if (stepError != null) return BadRequest(new { message = stepError });
 
         var playbook = new ActivityPlaybook
         {
-            AccountId   = acId.Value,
+            CustomerId  = custId.Value,
+            AccountId   = accountIds.FirstOrDefault(),
             Name        = req.Name.Trim(),
             Description = req.Description?.Trim(),
             IsActive    = req.IsActive,
-            IsDefault   = req.IsDefault,
             GatingMode  = req.GatingMode == "Block" ? "Block" : "Warn",
             Deleted     = false,
         };
@@ -177,142 +184,184 @@ public class PlaybooksController : ControllerBase
         await _db.SaveChangesAsync();
 
         ApplySteps(playbook.PlaybookId, req.Tasks ?? []);
+        await SyncAccountAssignmentsAsync(playbook.PlaybookId, accountIds, req.DefaultForAccountIds ?? []);
         await _db.SaveChangesAsync();
 
-        // Si se marca como predeterminado, desmarcar los demás de la cuenta
-        if (req.IsDefault)
-            await SetDefaultExclusive(acId.Value, playbook.PlaybookId);
-
-        var saved = await _db.ActivityPlaybooks.Include(p => p.Tasks)
+        var saved = await _db.ActivityPlaybooks.Include(p => p.Tasks).Include(p => p.AccountAssignments).ThenInclude(a => a.Account)
             .FirstAsync(p => p.PlaybookId == playbook.PlaybookId);
         return CreatedAtAction(nameof(Get), new { id = playbook.PlaybookId }, ToDto(saved));
     }
 
     // PUT /api/playbooks/{id}
     [HttpPut("{id:int}")]
-    [SwaggerOperation(Summary = "Actualizar playbook y sus pasos")]
-    public async Task<IActionResult> Update(int id, [FromQuery] int? accountId, [FromBody] SavePlaybookRequest req)
+    [SwaggerOperation(Summary = "Actualizar secuencia, sus pasos y las cuentas a las que aplica")]
+    public async Task<IActionResult> Update(int id, [FromQuery] int? accountId, [FromQuery] int? customerId, [FromBody] SavePlaybookRequest req)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate5) return gate5;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate4) return gate4;
         if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
 
-        var stepError = await ValidateAutomationStepsAsync(acId.Value, req.Tasks ?? []);
+        var accountIds = (req.AccountIds ?? []).Distinct().ToList();
+        var accountError = await ValidateAccountsAsync(custId.Value, accountIds, req.Tasks ?? []);
+        if (accountError != null) return BadRequest(new { message = accountError });
+
+        var stepError = await ValidateAutomationStepsAsync(custId.Value, req.Tasks ?? []);
         if (stepError != null) return BadRequest(new { message = stepError });
 
         var playbook = await _db.ActivityPlaybooks
             .Include(p => p.Tasks)
-            .FirstOrDefaultAsync(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted);
+            .FirstOrDefaultAsync(p => p.PlaybookId == id && p.CustomerId == custId && !p.Deleted);
         if (playbook == null) return NotFound();
 
         playbook.Name        = req.Name.Trim();
         playbook.Description = req.Description?.Trim();
         playbook.IsActive    = req.IsActive;
-        playbook.IsDefault   = req.IsDefault;
         playbook.GatingMode  = req.GatingMode == "Block" ? "Block" : "Warn";
 
         _db.PlaybookTasks.RemoveRange(playbook.Tasks);
         ApplySteps(playbook.PlaybookId, req.Tasks ?? []);
+        await SyncAccountAssignmentsAsync(playbook.PlaybookId, accountIds, req.DefaultForAccountIds ?? []);
         await _db.SaveChangesAsync();
 
-        if (req.IsDefault)
-            await SetDefaultExclusive(acId.Value, playbook.PlaybookId);
-
-        var saved = await _db.ActivityPlaybooks.Include(p => p.Tasks)
+        var saved = await _db.ActivityPlaybooks.Include(p => p.Tasks).Include(p => p.AccountAssignments).ThenInclude(a => a.Account)
             .FirstAsync(p => p.PlaybookId == id);
         return Ok(ToDto(saved));
     }
 
-    // PATCH /api/playbooks/{id}/default
+    // PATCH /api/playbooks/{id}/default?accountId=X
     [HttpPatch("{id:int}/default")]
-    [SwaggerOperation(Summary = "Marcar como playbook predeterminado de la cuenta")]
-    public async Task<IActionResult> SetDefault(int id, [FromQuery] int? accountId)
+    [SwaggerOperation(Summary = "Marcar esta secuencia como predeterminada para UNA cuenta puntual")]
+    public async Task<IActionResult> SetDefault(int id, [FromQuery] int accountId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate6) return gate6;
+        var assignment = await _db.PlaybookAccountAssignments
+            .FirstOrDefaultAsync(a => a.PlaybookId == id && a.AccountId == accountId);
+        if (assignment == null) return NotFound(new { message = "Esta secuencia no está asignada a esa cuenta." });
 
-        var playbook = await _db.ActivityPlaybooks
-            .FirstOrDefaultAsync(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted);
+        var playbook = await _db.ActivityPlaybooks.FirstOrDefaultAsync(p => p.PlaybookId == id && !p.Deleted);
         if (playbook == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(playbook.CustomerId) is { } gate5) return gate5;
 
-        playbook.IsDefault = true;
-        playbook.IsActive  = true;
+        playbook.IsActive = true;
+        assignment.IsDefault = true;
         await _db.SaveChangesAsync();
-        await SetDefaultExclusive(acId.Value, id);
+        await SetDefaultExclusive(accountId, id);
 
-        return Ok(new { playbook.PlaybookId, playbook.IsDefault });
+        return Ok(new { playbookId = id, accountId, isDefault = true });
     }
 
     // PATCH /api/playbooks/{id}/toggle
     [HttpPatch("{id:int}/toggle")]
-    [SwaggerOperation(Summary = "Activar / desactivar un playbook")]
-    public async Task<IActionResult> Toggle(int id, [FromQuery] int? accountId)
+    [SwaggerOperation(Summary = "Activar / desactivar una secuencia (en todas sus cuentas asignadas)")]
+    public async Task<IActionResult> Toggle(int id, [FromQuery] int? accountId, [FromQuery] int? customerId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate7) return gate7;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate6) return gate6;
 
         var playbook = await _db.ActivityPlaybooks
-            .FirstOrDefaultAsync(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted);
+            .Include(p => p.AccountAssignments)
+            .FirstOrDefaultAsync(p => p.PlaybookId == id && p.CustomerId == custId && !p.Deleted);
         if (playbook == null) return NotFound();
 
         playbook.IsActive = !playbook.IsActive;
-        // Un playbook inactivo no puede seguir siendo el predeterminado
-        if (!playbook.IsActive) playbook.IsDefault = false;
+        // Una secuencia inactiva no puede seguir siendo predeterminada en ninguna cuenta
+        if (!playbook.IsActive)
+            foreach (var a in playbook.AccountAssignments) a.IsDefault = false;
         await _db.SaveChangesAsync();
 
-        return Ok(new { playbook.PlaybookId, playbook.IsActive, playbook.IsDefault });
+        return Ok(new { playbook.PlaybookId, playbook.IsActive });
     }
 
     // DELETE /api/playbooks/{id}
     [HttpDelete("{id:int}")]
-    [SwaggerOperation(Summary = "Eliminar playbook (soft delete)")]
-    public async Task<IActionResult> Delete(int id, [FromQuery] int? accountId)
+    [SwaggerOperation(Summary = "Eliminar secuencia (soft delete)")]
+    public async Task<IActionResult> Delete(int id, [FromQuery] int? accountId, [FromQuery] int? customerId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate8) return gate8;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate7) return gate7;
 
         var playbook = await _db.ActivityPlaybooks
-            .FirstOrDefaultAsync(p => p.PlaybookId == id && p.AccountId == acId && !p.Deleted);
+            .Include(p => p.AccountAssignments)
+            .FirstOrDefaultAsync(p => p.PlaybookId == id && p.CustomerId == custId && !p.Deleted);
         if (playbook == null) return NotFound();
 
-        playbook.Deleted   = true;
-        playbook.IsDefault = false;
+        playbook.Deleted = true;
+        foreach (var a in playbook.AccountAssignments) a.IsDefault = false;
         await _db.SaveChangesAsync();
         return Ok(new { deleted = true });
     }
 
     // POST /api/playbooks/{id}/apply/{leadId}
     [HttpPost("{id:int}/apply/{leadId:long}")]
-    [SwaggerOperation(Summary = "Aplicar manualmente un playbook a un lead (genera las tareas)")]
+    [SwaggerOperation(Summary = "Aplicar manualmente una secuencia a un lead (genera las tareas)")]
     public async Task<IActionResult> Apply(int id, long leadId, [FromQuery] int? accountId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate9) return gate9;
+        if (accountId == null) return NotFound();
+        var custId = await _db.Accounts.AsNoTracking().Where(a => a.AccountId == accountId).Select(a => (int?)a.CustomerId).FirstOrDefaultAsync();
+        if (custId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate8) return gate8;
 
-        var lead = await _db.Leads.FirstOrDefaultAsync(l => l.LeadId == leadId && l.AccountId == acId);
+        var lead = await _db.Leads.FirstOrDefaultAsync(l => l.LeadId == leadId && l.AccountId == accountId);
         if (lead == null) return NotFound(new { message = "Lead no encontrado en la cuenta." });
 
-        var count = await _playbooks.ApplyPlaybookAsync(id, acId.Value, leadId, lead.OwnerUserId);
-        if (count == 0) return NotFound(new { message = "Playbook no encontrado o sin pasos." });
+        var count = await _playbooks.ApplyPlaybookAsync(id, accountId.Value, leadId, lead.OwnerUserId);
+        if (count == 0) return NotFound(new { message = "Secuencia no encontrada, sin pasos, o no asignada a esta cuenta." });
 
         return Ok(new { applied = true, tasksCreated = count });
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /// <summary>Deja solo un playbook predeterminado por cuenta.</summary>
-    private async Task SetDefaultExclusive(int accountId, int keepId)
+    /// <summary>Deja solo una secuencia predeterminada por cuenta (entre TODAS las
+    /// secuencias asignadas a esa cuenta, no solo las de un mismo playbook).</summary>
+    private async Task SetDefaultExclusive(int accountId, int keepPlaybookId)
     {
-        var others = await _db.ActivityPlaybooks
-            .Where(p => p.AccountId == accountId && p.IsDefault && p.PlaybookId != keepId && !p.Deleted)
+        var others = await _db.PlaybookAccountAssignments
+            .Where(a => a.AccountId == accountId && a.IsDefault && a.PlaybookId != keepPlaybookId)
             .ToListAsync();
         foreach (var o in others) o.IsDefault = false;
         if (others.Count > 0) await _db.SaveChangesAsync();
+    }
+
+    /// <summary>Las cuentas deben pertenecer al cliente. Si algún paso es de fase Deal
+    /// (StageId != null) o "AdvanceStage", la secuencia solo puede asignarse a UNA cuenta
+    /// — esos pasos dependen del embudo específico de esa cuenta.</summary>
+    private async Task<string?> ValidateAccountsAsync(int customerId, List<int> accountIds, List<PlaybookStepRequest> steps)
+    {
+        if (accountIds.Count == 0) return "Elige al menos una cuenta a la que aplique esta secuencia.";
+
+        var validCount = await _db.Accounts.CountAsync(a => accountIds.Contains(a.AccountId) && a.CustomerId == customerId);
+        if (validCount != accountIds.Count) return "Una de las cuentas elegidas no pertenece a este cliente.";
+
+        var hasDealSteps = steps.Any(s => s.StageId != null || s.ActionType == "AdvanceStage");
+        if (hasDealSteps && accountIds.Count > 1)
+            return "Esta secuencia tiene pasos de etapa de Deal — esos dependen del embudo de una cuenta específica, así que solo se puede asignar a una cuenta.";
+
+        return null;
+    }
+
+    private async Task SyncAccountAssignmentsAsync(int playbookId, List<int> accountIds, List<int> defaultForAccountIds)
+    {
+        var existing = await _db.PlaybookAccountAssignments.Where(a => a.PlaybookId == playbookId).ToListAsync();
+        _db.PlaybookAccountAssignments.RemoveRange(existing);
+
+        foreach (var accId in accountIds)
+        {
+            _db.PlaybookAccountAssignments.Add(new PlaybookAccountAssignment
+            {
+                PlaybookId = playbookId,
+                AccountId  = accId,
+                IsDefault  = defaultForAccountIds.Contains(accId),
+            });
+        }
+        await _db.SaveChangesAsync();
+
+        // Si alguna quedó marcada predeterminada, ninguna OTRA secuencia de esa cuenta
+        // se queda predeterminada al mismo tiempo.
+        foreach (var accId in accountIds.Where(defaultForAccountIds.Contains))
+            await SetDefaultExclusive(accId, playbookId);
     }
 
     private void ApplySteps(int playbookId, List<PlaybookStepRequest> steps)
@@ -342,7 +391,7 @@ public class PlaybooksController : ControllerBase
     /// debe estar conectado — si no, no se deja activar para no prometer un envío que
     /// nunca va a salir.
     /// </summary>
-    private async Task<string?> ValidateAutomationStepsAsync(int accountId, List<PlaybookStepRequest> steps)
+    private async Task<string?> ValidateAutomationStepsAsync(int customerId, List<PlaybookStepRequest> steps)
     {
         var autoSteps = steps.Where(s => s.AutomationMode == "Automatico").ToList();
         if (autoSteps.Count == 0) return null;
@@ -355,42 +404,31 @@ public class PlaybooksController : ControllerBase
 
         var templateIds = autoSteps.Select(s => s.TemplateId!.Value).Distinct().ToList();
         var templates = await _db.MessageTemplates
-            .Where(t => templateIds.Contains(t.TemplateId) && t.AccountId == accountId)
+            .Where(t => templateIds.Contains(t.TemplateId) && t.CustomerId == customerId)
             .ToDictionaryAsync(t => t.TemplateId);
 
         foreach (var s in autoSteps)
         {
             if (!templates.TryGetValue(s.TemplateId!.Value, out var tpl))
-                return "Una de las plantillas elegidas no existe o no pertenece a esta cuenta.";
+                return "Una de las plantillas elegidas no existe o no pertenece a este cliente.";
             if (tpl.Channel != s.ActionType)
                 return $"La plantilla \"{tpl.Name}\" es de {tpl.Channel}, no coincide con el paso de {s.ActionType}.";
         }
 
-        var account = await _db.Accounts.AsNoTracking()
-            .Where(a => a.AccountId == accountId)
-            .Select(a => new { a.CustomerId, a.SmtpEnabled, a.SmtpIsVerified })
-            .FirstOrDefaultAsync();
-        if (account == null) return "Cuenta no encontrada.";
+        var whatsappNumber = await _db.Customers.AsNoTracking()
+            .Where(c => c.Id == customerId).Select(c => c.WhatsappNumber).FirstOrDefaultAsync();
+        var whatsappConnected = !string.IsNullOrWhiteSpace(whatsappNumber);
 
-        if (autoSteps.Any(s => s.ActionType == "Email") && !(account.SmtpEnabled == true && account.SmtpIsVerified == true))
-            return "Conecta y verifica tu correo en Configuración antes de activar el envío automático de Email.";
-
-        if (autoSteps.Any(s => s.ActionType == "WhatsApp"))
-        {
-            var whatsappNumber = await _db.Customers.AsNoTracking()
-                .Where(c => c.Id == account.CustomerId)
-                .Select(c => c.WhatsappNumber)
-                .FirstOrDefaultAsync();
-            if (string.IsNullOrWhiteSpace(whatsappNumber))
-                return "Este cliente no tiene WhatsApp conectado — no se puede activar el envío automático de WhatsApp.";
-        }
+        if (autoSteps.Any(s => s.ActionType == "WhatsApp") && !whatsappConnected)
+            return "Este cliente no tiene WhatsApp conectado — no se puede activar el envío automático de WhatsApp.";
 
         return null;
     }
 
     private static object ToDto(ActivityPlaybook p) => new
     {
-        p.PlaybookId, p.Name, p.Description, p.IsActive, p.IsDefault, p.GatingMode,
+        p.PlaybookId, p.Name, p.Description, p.IsActive, p.GatingMode,
+        accounts = p.AccountAssignments.Select(a => new { a.AccountId, accountName = a.Account.Name, a.IsDefault }),
         tasks = p.Tasks.OrderBy(t => t.Order).Select(t => new
         {
             t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId,
@@ -407,8 +445,9 @@ public class SavePlaybookRequest
     public string  Name        { get; set; } = "";
     public string? Description  { get; set; }
     public bool    IsActive     { get; set; } = true;
-    public bool    IsDefault    { get; set; } = false;
     public string? GatingMode   { get; set; } = "Warn";   // "Block" | "Warn"
+    public List<int>? AccountIds { get; set; }            // a qué cuentas del cliente aplica
+    public List<int>? DefaultForAccountIds { get; set; }  // en cuáles de esas es la predeterminada
     public List<PlaybookStepRequest>? Tasks { get; set; }
 }
 

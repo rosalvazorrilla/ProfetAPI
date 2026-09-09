@@ -114,6 +114,22 @@
 --   (corrida por Claude vía sqlcmd). Texto completo del DDL: ver historial de
 --   conversación / git blame.
 
+-- 2026-09-09 — Secuencias compartibles entre cuentas del mismo cliente +
+--   reubicación a Configuración: CustomerId en dbo.ActivityPlaybooks y
+--   dbo.MessageTemplates (dueño real pasa de Account a Customer), nueva
+--   tabla dbo.PlaybookAccountAssignments (PlaybookId, AccountId, IsDefault —
+--   reemplaza el IsDefault único por playbook: ahora es una propiedad de la
+--   asignación, porque la misma secuencia puede ser default en una cuenta y
+--   no en otra). Backfill: CustomerId heredado del AccountId actual de cada
+--   playbook/plantilla; una fila de asignación por playbook existente
+--   preservando su IsDefault. Reglas de negocio (en código, no DDL): un
+--   playbook con algún paso de fase Deal (StageId != null o
+--   ActionType == 'AdvanceStage') solo puede asignarse a una cuenta — los
+--   IDs de etapa son específicos del Funnel de cada cuenta. EJECUTADA
+--   (corrida por Claude vía sqlcmd, confirmada con SELECT COUNT(*) —
+--   0 playbooks/plantillas sin CustomerId, 2 filas de asignación creadas).
+--   Texto completo del DDL: ver historial de conversación / git blame.
+
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- (nada pendiente por ahora)
 

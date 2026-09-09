@@ -92,6 +92,7 @@ namespace ProfetAPI.Data
         public DbSet<Log> Logs { get; set; } = null!;
         public DbSet<ActivityPlaybook> ActivityPlaybooks { get; set; } = null!;
         public DbSet<PlaybookTask> PlaybookTasks { get; set; } = null!;
+        public DbSet<PlaybookAccountAssignment> PlaybookAccountAssignments { get; set; } = null!;
         public DbSet<MessageTemplate> MessageTemplates { get; set; } = null!;
         public DbSet<AutomationSendLog> AutomationSendLogs { get; set; } = null!;
         public DbSet<Line> Lines { get; set; } = null!;
@@ -152,6 +153,7 @@ namespace ProfetAPI.Data
             
             // Llaves Compuestas
             builder.Entity<UserTeam>().HasKey(ut => new { ut.UserId, ut.TeamId });
+            builder.Entity<PlaybookAccountAssignment>().HasKey(paa => new { paa.PlaybookId, paa.AccountId });
 
             // Team → Leader (FK opcional, SET NULL al borrar el usuario líder)
             builder.Entity<Team>()

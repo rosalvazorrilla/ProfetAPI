@@ -30,35 +30,38 @@ public class MessageTemplatesController : ControllerBase
         _featureGate = featureGate;
     }
 
-    private async Task<int?> ResolveAccountId(int? accountId)
+    private async Task<int?> ResolveCustomerId(int? accountId, int? customerId)
     {
-        if (IsAdmin && accountId.HasValue) return accountId;
-        if (!IsAdmin)
-            return await _db.AccountInternalUsers
-                .Where(u => u.UserId == UserId)
-                .Select(u => (int?)u.AccountId)
-                .FirstOrDefaultAsync();
-        return accountId;
+        if (IsAdmin)
+        {
+            if (customerId.HasValue) return customerId;
+            if (accountId.HasValue)
+                return await _db.Accounts.AsNoTracking().Where(a => a.AccountId == accountId)
+                    .Select(a => (int?)a.CustomerId).FirstOrDefaultAsync();
+            return null;
+        }
+        return await _db.AccountInternalUsers.AsNoTracking()
+            .Where(u => u.UserId == UserId)
+            .Select(u => (int?)u.Account.CustomerId)
+            .FirstOrDefaultAsync();
     }
 
-    private async Task<IActionResult?> RequireSequenceFeatureAsync(int accountId)
+    private async Task<IActionResult?> RequireSequenceFeatureAsync(int customerId)
     {
-        var customerId = await _db.Accounts.AsNoTracking()
-            .Where(a => a.AccountId == accountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
         if (await _featureGate.HasFeatureAsync(customerId, SequenceFeatureCode)) return null;
         return StatusCode(403, new { message = "Esta función no está incluida en tu plan.", featureCode = SequenceFeatureCode });
     }
 
     // GET /api/message-templates?channel=Email
     [HttpGet]
-    [SwaggerOperation(Summary = "Listar plantillas de la cuenta")]
-    public async Task<IActionResult> List([FromQuery] int? accountId, [FromQuery] string? channel)
+    [SwaggerOperation(Summary = "Listar plantillas del cliente")]
+    public async Task<IActionResult> List([FromQuery] int? accountId, [FromQuery] int? customerId, [FromQuery] string? channel)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate1) return gate1;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate1) return gate1;
 
-        var q = _db.MessageTemplates.Where(t => t.AccountId == acId);
+        var q = _db.MessageTemplates.Where(t => t.CustomerId == custId);
         if (!string.IsNullOrWhiteSpace(channel)) q = q.Where(t => t.Channel == channel);
 
         var templates = await q.OrderBy(t => t.Name)
@@ -86,17 +89,17 @@ public class MessageTemplatesController : ControllerBase
     // POST /api/message-templates
     [HttpPost]
     [SwaggerOperation(Summary = "Crear plantilla")]
-    public async Task<IActionResult> Create([FromQuery] int? accountId, [FromBody] SaveTemplateRequest req)
+    public async Task<IActionResult> Create([FromQuery] int? accountId, [FromQuery] int? customerId, [FromBody] SaveTemplateRequest req)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate2) return gate2;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate2) return gate2;
         var error = ValidateRequest(req);
         if (error != null) return BadRequest(new { message = error });
 
         var template = new MessageTemplate
         {
-            AccountId = acId.Value,
+            CustomerId = custId.Value,
             Name      = req.Name!.Trim(),
             Channel   = req.Channel!,
             Subject   = req.Channel == "Email" ? req.Subject?.Trim() : null,
@@ -111,15 +114,15 @@ public class MessageTemplatesController : ControllerBase
     // PUT /api/message-templates/{id}
     [HttpPut("{id:int}")]
     [SwaggerOperation(Summary = "Actualizar plantilla")]
-    public async Task<IActionResult> Update(int id, [FromQuery] int? accountId, [FromBody] SaveTemplateRequest req)
+    public async Task<IActionResult> Update(int id, [FromQuery] int? accountId, [FromQuery] int? customerId, [FromBody] SaveTemplateRequest req)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate3) return gate3;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate3) return gate3;
         var error = ValidateRequest(req);
         if (error != null) return BadRequest(new { message = error });
 
-        var template = await _db.MessageTemplates.FirstOrDefaultAsync(t => t.TemplateId == id && t.AccountId == acId);
+        var template = await _db.MessageTemplates.FirstOrDefaultAsync(t => t.TemplateId == id && t.CustomerId == custId);
         if (template == null) return NotFound();
 
         template.Name     = req.Name!.Trim();
@@ -134,13 +137,13 @@ public class MessageTemplatesController : ControllerBase
     // DELETE /api/message-templates/{id}
     [HttpDelete("{id:int}")]
     [SwaggerOperation(Summary = "Eliminar plantilla")]
-    public async Task<IActionResult> Delete(int id, [FromQuery] int? accountId)
+    public async Task<IActionResult> Delete(int id, [FromQuery] int? accountId, [FromQuery] int? customerId)
     {
-        var acId = await ResolveAccountId(accountId);
-        if (acId == null) return NotFound();
-        if (await RequireSequenceFeatureAsync(acId.Value) is { } gate4) return gate4;
+        var custId = await ResolveCustomerId(accountId, customerId);
+        if (custId == null) return NotFound();
+        if (await RequireSequenceFeatureAsync(custId.Value) is { } gate4) return gate4;
 
-        var template = await _db.MessageTemplates.FirstOrDefaultAsync(t => t.TemplateId == id && t.AccountId == acId);
+        var template = await _db.MessageTemplates.FirstOrDefaultAsync(t => t.TemplateId == id && t.CustomerId == custId);
         if (template == null) return NotFound();
 
         var inUse = await _db.PlaybookTasks.AnyAsync(pt => pt.TemplateId == id);

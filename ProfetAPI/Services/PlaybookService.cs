@@ -46,7 +46,8 @@ public class PlaybookService(ApplicationDbContext db, IFeatureGateService featur
     {
         if (!await HasFeatureForAccountAsync(accountId)) return 0;
         var playbook = await db.ActivityPlaybooks
-            .Where(p => p.PlaybookId == playbookId && p.AccountId == accountId && !p.Deleted)
+            .Where(p => p.PlaybookId == playbookId && !p.Deleted
+                     && p.AccountAssignments.Any(a => a.AccountId == accountId))
             .Include(p => p.Tasks)
             .FirstOrDefaultAsync();
 
@@ -131,11 +132,15 @@ public class PlaybookService(ApplicationDbContext db, IFeatureGateService featur
         return playbook?.GatingMode ?? "Warn";
     }
 
-    private Task<ActivityPlaybook?> GetDefaultPlaybookAsync(int accountId) =>
-        db.ActivityPlaybooks
-            .Where(p => p.AccountId == accountId && p.IsDefault && p.IsActive && !p.Deleted)
-            .Include(p => p.Tasks)
+    private async Task<ActivityPlaybook?> GetDefaultPlaybookAsync(int accountId)
+    {
+        var assignment = await db.PlaybookAccountAssignments
+            .Where(a => a.AccountId == accountId && a.IsDefault)
+            .Include(a => a.Playbook).ThenInclude(p => p.Tasks)
             .FirstOrDefaultAsync();
+        var playbook = assignment?.Playbook;
+        return playbook != null && playbook.IsActive && !playbook.Deleted ? playbook : null;
+    }
 
     private async Task<int> GenerateTasksAsync(ActivityPlaybook playbook, int accountId, string entityType, long entityId, string? ownerUserId, int? stageId)
     {

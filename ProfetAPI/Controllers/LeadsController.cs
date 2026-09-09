@@ -896,6 +896,10 @@ public class LeadsController : ControllerBase
                 return StatusCode(403, new { message = "Esta función no está incluida en tu plan.", featureCode = "SEQUENCE_AUTOMATION" });
         }
 
+        // La plantilla debe ser del mismo cliente que los leads seleccionados — nunca de otro.
+        if (!gateCustomerIds.Contains(template.CustomerId))
+            return BadRequest(new { message = "Esta plantilla no pertenece al cliente de los prospectos seleccionados." });
+
         // Igual que en las secuencias: el envío a leads/deals sale por el correo PROPIO
         // de la cuenta, nunca por el SMTP global de Profet — si no está conectado, se
         // avisa de una vez en vez de dejar que cada envío falle en silencio de a uno.
