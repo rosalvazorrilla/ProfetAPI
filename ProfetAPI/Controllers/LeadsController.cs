@@ -72,6 +72,7 @@ public class LeadsController : ControllerBase
         [FromQuery] bool unassigned = false,
         [FromQuery] bool noSequence = false,
         [FromQuery] bool noReply = false,
+        [FromQuery] int? noMovementDays = null,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50)
     {
@@ -140,6 +141,16 @@ public class LeadsController : ControllerBase
             query = query.Where(l =>
                 _context.MessagesWhatsapp.Any(m => m.Contact!.LeadId == l.LeadId && m.Direction == "outgoing") &&
                 !_context.MessagesWhatsapp.Any(m => m.Contact!.LeadId == l.LeadId && m.Direction == "incoming"));
+
+        // Sin ningún evento en el timeline (tarea, llamada, correo, WhatsApp, nota,
+        // cambio de etapa, etc.) en los últimos N días — cubre tanto al lead que
+        // nunca tuvo timeline como al que sí tuvo pero se quedó frío.
+        if (noMovementDays.HasValue && noMovementDays.Value > 0)
+        {
+            var movementCutoff = DateTime.UtcNow.AddDays(-noMovementDays.Value);
+            query = query.Where(l => !_context.TimelineEvents.Any(t =>
+                t.EntityType == "Lead" && t.EntityId == l.LeadId && t.CreatedOn > movementCutoff));
+        }
 
         var total = await query.CountAsync();
 
