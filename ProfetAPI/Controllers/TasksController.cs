@@ -133,13 +133,40 @@ public class TasksController : ControllerBase
             })
             .ToListAsync();
 
+        // EntityType es polimórfico (Lead o Deal) — se resuelve el nombre aparte en dos
+        // consultas por lote en vez de un join, para no repetir "de quién es" tarea por
+        // tarea (antes el calendario/checklist solo mostraba el Subject, sin decir a qué
+        // prospecto u oportunidad pertenecía — con el mismo Subject repetido es imposible
+        // distinguirlas).
+        var leadIds = data.Where(a => a.EntityType == "Lead" && a.EntityId.HasValue).Select(a => a.EntityId!.Value).Distinct().ToList();
+        var dealIds = data.Where(a => a.EntityType == "Deal" && a.EntityId.HasValue).Select(a => (int)a.EntityId!.Value).Distinct().ToList();
+
+        var leadNames = leadIds.Count == 0 ? new Dictionary<long, string?>() : await _context.Leads
+            .Where(l => leadIds.Contains(l.LeadId))
+            .Select(l => new { l.LeadId, l.Name })
+            .ToDictionaryAsync(l => l.LeadId, l => l.Name);
+        var dealNames = dealIds.Count == 0 ? new Dictionary<int, string?>() : await _context.Deals
+            .Where(d => dealIds.Contains(d.DealId))
+            .Select(d => new { d.DealId, d.DealName })
+            .ToDictionaryAsync(d => d.DealId, d => (string?)d.DealName);
+
+        var enriched = data.Select(a => new
+        {
+            a.ActivityId, a.Subject, a.Notes, a.Priority, a.TaskStatus, a.DueDate, a.CreatedOn,
+            a.EntityType, a.EntityId, a.StageId, a.ResolutionNote, a.ActionType,
+            a.OwnerUserId, a.AssignedToUserId, a.AssignedToName, a.OwnerName,
+            EntityName = a.EntityType == "Lead" && a.EntityId.HasValue ? leadNames.GetValueOrDefault(a.EntityId.Value)
+                       : a.EntityType == "Deal" && a.EntityId.HasValue ? dealNames.GetValueOrDefault((int)a.EntityId.Value)
+                       : null,
+        }).ToList();
+
         return Ok(new
         {
             total,
             page,
             pageSize,
             stats = new { totalAll, totalPending, totalCompleted, totalOverdue },
-            data,
+            data = enriched,
         });
     }
 
