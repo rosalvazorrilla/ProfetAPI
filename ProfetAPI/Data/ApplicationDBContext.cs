@@ -136,6 +136,9 @@ namespace ProfetAPI.Data
         // --- DBSET PARA ASIGNACIÓN DE PMs A CLIENTES ---
         public DbSet<PmCustomerAssignment> PmCustomerAssignments { get; set; } = null!;
 
+        // --- AI QUANT — Lead Score (ledger de corridas de investigación IA) ---
+        public DbSet<AiQuantRun> AiQuantRuns { get; set; } = null!;
+
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
 

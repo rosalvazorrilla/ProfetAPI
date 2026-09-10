@@ -129,6 +129,16 @@
 --   (corrida por Claude vía sqlcmd, confirmada con SELECT COUNT(*) —
 --   0 playbooks/plantillas sin CustomerId, 2 filas de asignación creadas).
 --   Texto completo del DDL: ver historial de conversación / git blame.
+-- 2026-09-10 — AI QUANT — Lead Score: nueva tabla dbo.AiQuantRuns (ledger de
+--   corridas de investigación IA por prospecto: estado, inputs del vendedor,
+--   ResultJson, Score/Tier, tokens + WebSearchCount + CostUsd para el tope
+--   mensual). Columna dbo.Customers.AiQuantMonthlyCapUsd DECIMAL(18,2) NULL
+--   (NULL = ilimitado, solo AdminGlobal la edita). Seed del candado: Feature
+--   'AI_QUANT_LEAD_SCORE' (FeatureId=17) + AddOn 'AI QUANT - Lead Score'
+--   (AddOnId=8, $299/mes — precio placeholder, ajustar en /admin/planes). Sin
+--   grandfathering (función nueva). EJECUTADA (corrida por Claude vía sqlcmd,
+--   confirmada con sys.tables/sys.columns + SELECT del Feature/AddOn). Texto
+--   completo del DDL: ver historial de conversación / git blame.
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- (nada pendiente por ahora)

@@ -70,7 +70,8 @@ namespace ProfetAPI.Controllers
                     c.SetupStep,
                     null,
                     c.InitialDate,
-                    c.TimeZoneId
+                    c.TimeZoneId,
+                    c.AiQuantMonthlyCapUsd
                 ))
                 .ToListAsync();
 
@@ -124,7 +125,8 @@ namespace ProfetAPI.Controllers
                     c.SetupStep,
                     null,
                     c.InitialDate,
-                    c.TimeZoneId
+                    c.TimeZoneId,
+                    c.AiQuantMonthlyCapUsd
                 ))
                 .FirstOrDefaultAsync();
 
@@ -375,11 +377,14 @@ namespace ProfetAPI.Controllers
             customer.Contact = model.Contact;
             customer.Phone = model.Phone;
             if (model.TimeZoneId != null) customer.TimeZoneId = model.TimeZoneId;
+            // Solo AdminGlobal ajusta el tope de AI QUANT (el DTO llega con -1 para "borrar" el tope → NULL).
+            if (model.AiQuantMonthlyCapUsd.HasValue && User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value == "AdminGlobal")
+                customer.AiQuantMonthlyCapUsd = model.AiQuantMonthlyCapUsd.Value < 0 ? null : model.AiQuantMonthlyCapUsd.Value;
             await _context.SaveChangesAsync();
 
             return Ok(new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status,
                 $"{_frontendBaseUrl}/setup?token={customer.SetupToken}", customer.SetupToken, null, null,
-                TimeZoneId: customer.TimeZoneId));
+                TimeZoneId: customer.TimeZoneId, AiQuantMonthlyCapUsd: customer.AiQuantMonthlyCapUsd));
         }
 
         // ── GET api/customers/5/subscription ────────────────────────────────

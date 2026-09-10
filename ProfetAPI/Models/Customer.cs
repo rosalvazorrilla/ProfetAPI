@@ -100,6 +100,11 @@ public class Customer
     /// America/Mexico_City.</summary>
     public string? TimeZoneId { get; set; }
 
+    /// <summary>Tope de gasto mensual en USD para AI QUANT — Lead Score. Null = ilimitado.
+    /// Solo lo edita AdminGlobal; el cliente que llega al tope ve "contacta a tu administrador".</summary>
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal? AiQuantMonthlyCapUsd { get; set; }
+
     // --- Propiedades de navegación ---
     // Un cliente tiene muchos usuarios y muchos equipos.
     public virtual ICollection<ApplicationUser> Users { get; set; } = new List<ApplicationUser>();

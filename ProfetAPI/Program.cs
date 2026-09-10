@@ -111,6 +111,10 @@ builder.Services.AddScoped<ProfetAPI.Services.ScoringCalculator>();
 // IA de scoring (generador desde prompt + scoring runtime)
 builder.Services.AddScoped<ProfetAPI.Services.IScoringAiService, ProfetAPI.Services.ScoringAiService>();
 
+// AI QUANT — Lead Score (investigación IA con búsqueda web + job que la procesa async)
+builder.Services.AddScoped<ProfetAPI.Services.IAiQuantService, ProfetAPI.Services.AiQuantService>();
+builder.Services.AddHostedService<ProfetAPI.Services.AiQuantJob>();
+
 // F4-T4: re-scoring automático cuando llega info nueva al lead (con cooldown)
 builder.Services.AddSingleton<ProfetAPI.Services.ILeadRescoreTrigger, ProfetAPI.Services.LeadRescoreTrigger>();
 

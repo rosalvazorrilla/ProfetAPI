@@ -49,13 +49,15 @@ namespace ProfetAPI.Dtos
         int SetupStep = 0,
         string? PlanName = null,
         DateTime? CreatedAt = null,
-        string? TimeZoneId = null
+        string? TimeZoneId = null,
+        decimal? AiQuantMonthlyCapUsd = null
     );
 
     public record UpdateCustomerDto(
         string Name,
         string Contact,
         string? Phone,
-        string? TimeZoneId = null
+        string? TimeZoneId = null,
+        decimal? AiQuantMonthlyCapUsd = null
     );
 }
