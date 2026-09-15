@@ -153,7 +153,11 @@ public class AiQuantService(
             run.CompletedOn    = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            await timeline.LogAsync(run.AccountId, "Lead", run.LeadId, "note",
+            // Tipo "ai_quant", NO "note" — si esto se guardara como nota, la SIGUIENTE
+            // corrida se la leería a sí misma en "NOTAS PREVIAS DEL VENDEDOR" (bug real
+            // detectado: la IA terminaba "recordando" una empresa que nunca estuvo en el
+            // lead, solo porque su propio resumen anterior quedó marcado como nota humana).
+            await timeline.LogAsync(run.AccountId, "Lead", run.LeadId, "ai_quant",
                 $"AI QUANT: {tier ?? "sin tier"} · {score} pts",
                 detail: parsed.RootElement.TryGetProperty("summary", out var su) ? su.GetString() : null,
                 userId: run.RunByUserId);
