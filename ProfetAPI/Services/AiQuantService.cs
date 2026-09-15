@@ -53,6 +53,27 @@ public class AiQuantService(
                 .FirstOrDefaultAsync(ct);
             if (lead == null) { await FailAsync(run, "Prospecto no encontrado.", sw, ct); return; }
 
+            // Corrida anterior (Done) de este mismo lead, si existe — para que la IA compare
+            // y el vendedor vea qué cambió en vez de releer la ficha completa de nuevo.
+            var previous = await db.AiQuantRuns.AsNoTracking()
+                .Where(r => r.LeadId == run.LeadId && r.Status == "Done" && r.RunId != run.RunId)
+                .OrderByDescending(r => r.CreatedOn)
+                .Select(r => new { r.Score, r.Tier, r.ResultJson, r.CreatedOn })
+                .FirstOrDefaultAsync(ct);
+            string? previousSummary = null, previousRiskFlags = null;
+            if (previous?.ResultJson != null)
+            {
+                try
+                {
+                    using var prevDoc = JsonDocument.Parse(previous.ResultJson);
+                    previousSummary = prevDoc.RootElement.TryGetProperty("summary", out var ps) ? ps.GetString() : null;
+                    if (prevDoc.RootElement.TryGetProperty("businessProfile", out var bp) &&
+                        bp.TryGetProperty("riskFlags", out var rf) && rf.ValueKind == JsonValueKind.Array)
+                        previousRiskFlags = string.Join(" | ", rf.EnumerateArray().Select(x => x.GetString()));
+                }
+                catch (JsonException) { /* si el JSON viejo no parsea, simplemente no se compara */ }
+            }
+
             // Notas de timeline tipo "note" — el input libre que el vendedor deja tras la llamada.
             var notes = await db.TimelineEvents.AsNoTracking()
                 .Where(e => e.EntityType == "Lead" && e.EntityId == run.LeadId && e.Type == "note" && !e.Deleted)
@@ -102,6 +123,13 @@ public class AiQuantService(
                 sb.AppendLine();
                 sb.AppendLine("CONVERSACIÓN DE WHATSAPP (más reciente al final):");
                 foreach (var m in waMessages) sb.AppendLine(m);
+            }
+            if (previous != null)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"ANÁLISIS ANTERIOR (corrida del {previous.CreatedOn:yyyy-MM-dd}, score {previous.Score} / {previous.Tier}):");
+                if (previousSummary != null) sb.AppendLine($"- Resumen de entonces: {previousSummary}");
+                if (previousRiskFlags != null) sb.AppendLine($"- Riesgos de entonces: {previousRiskFlags}");
             }
             sb.AppendLine();
             sb.AppendLine("Investiga la EMPRESA y devuelve la ficha en el formato JSON indicado.");
@@ -185,6 +213,13 @@ public class AiQuantService(
         - "scoreBreakdown": máximo 5 dimensiones, "note" de máximo 12 palabras.
         No repitas en un campo lo que ya dijiste en otro.
 
+        Si el contexto trae un bloque "ANÁLISIS ANTERIOR", esto es una RE-EJECUCIÓN sobre el
+        mismo prospecto. Compara tu nueva investigación contra eso y llena "changesSinceLastRun"
+        con SOLO lo que cambió de verdad (máximo 20 palabras) — ej. "Ahora sí tiene web activa;
+        ya no aparece la vacante de ventas". Si no cambió nada relevante, escribe "Sin cambios
+        relevantes desde la última corrida.". Si NO hay "ANÁLISIS ANTERIOR" (primera corrida de
+        este prospecto), deja "changesSinceLastRun" en null — no inventes una comparación.
+
         El "quantScore" (0-100) es tu juicio cualitativo del atractivo comercial de este
         prospecto (tamaño del negocio, seriedad/legitimidad, relevancia en su sector, encaje).
         El "tier" se deriva del score: 0-39 "Frío", 40-64 "Tibio", 65-84 "Caliente", 85-100 "Prioritario".
@@ -194,7 +229,7 @@ public class AiQuantService(
     private const string Schema = """
         {
           "type":"object","additionalProperties":false,
-          "required":["digitalPresence","businessProfile","quantScore","tier","scoreBreakdown","dealSizeEstimate","strategy","sources","summary"],
+          "required":["digitalPresence","businessProfile","quantScore","tier","scoreBreakdown","dealSizeEstimate","strategy","sources","summary","changesSinceLastRun"],
           "properties":{
             "digitalPresence":{"type":"object","additionalProperties":false,
               "required":["hasWebsite","websiteUrl","websiteQuality","socialNetworks","salesSignal"],
@@ -231,7 +266,8 @@ public class AiQuantService(
                 "doNotDo":{"type":"array","items":{"type":"string"}}}},
             "sources":{"type":"array","items":{"type":"object","additionalProperties":false,
               "required":["title","url"],"properties":{"title":{"type":"string"},"url":{"type":"string"}}}},
-            "summary":{"type":"string"}
+            "summary":{"type":"string"},
+            "changesSinceLastRun":{"type":["string","null"]}
           }
         }
         """;

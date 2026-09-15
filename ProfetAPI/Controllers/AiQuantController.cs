@@ -99,6 +99,14 @@ public class AiQuantController(
             .FirstOrDefaultAsync();
         if (run == null) return Ok(new { status = (string?)null });
 
+        // Corrida Done anterior a esta (si la hay) — el frontend arma el badge de
+        // "subió/bajó de score" sin depender de que la IA lo calcule.
+        var previous = await db.AiQuantRuns.AsNoTracking()
+            .Where(r => r.LeadId == id && r.Status == "Done" && r.RunId != run.RunId)
+            .OrderByDescending(r => r.CreatedOn)
+            .Select(r => new { r.Score, r.Tier, r.CreatedOn })
+            .FirstOrDefaultAsync();
+
         var runByName = await ResolveUserName(run.RunByUserId);
         return Ok(new
         {
@@ -106,6 +114,7 @@ public class AiQuantController(
             result = run.ResultJson,   // JSON crudo — el frontend lo parsea
             run.Error, cost = run.CostUsd,
             run.CreatedOn, run.CompletedOn, runByName,
+            previousScore = previous?.Score, previousTier = previous?.Tier, previousRunOn = previous?.CreatedOn,
         });
     }
 
