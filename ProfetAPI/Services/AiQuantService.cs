@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ProfetAPI.Data;
+using ProfetAPI.Models;
 
 namespace ProfetAPI.Services;
 
@@ -153,6 +154,18 @@ public class AiQuantService(
             run.CompletedOn    = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
+            // Si de verdad encontró un sitio web y el prospecto no tenía ya uno capturado,
+            // lo guarda en la variable "Sitio web" — así lo que la IA investiga queda en el
+            // registro del lead, no solo dentro de la ficha de esta corrida.
+            if (parsed.RootElement.TryGetProperty("digitalPresence", out var dp) &&
+                dp.TryGetProperty("hasWebsite", out var hw) && hw.GetBoolean() &&
+                dp.TryGetProperty("websiteUrl", out var wu) && wu.ValueKind == JsonValueKind.String)
+            {
+                var websiteUrl = wu.GetString();
+                if (!string.IsNullOrWhiteSpace(websiteUrl))
+                    await AutoFillWebsiteVariableAsync(run.AccountId, run.LeadId, websiteUrl, ct);
+            }
+
             // Tipo "ai_quant", NO "note" — si esto se guardara como nota, la SIGUIENTE
             // corrida se la leería a sí misma en "NOTAS PREVIAS DEL VENDEDOR" (bug real
             // detectado: la IA terminaba "recordando" una empresa que nunca estuvo en el
@@ -172,6 +185,36 @@ public class AiQuantService(
             logger.LogWarning(ex, "Falló la corrida AI QUANT {RunId}", runId);
             await FailAsync(run, ex is HttpRequestException ? "La IA no pudo completar la investigación — intenta de nuevo." : ex.Message, sw, ct);
         }
+    }
+
+    private async Task AutoFillWebsiteVariableAsync(int accountId, long leadId, string websiteUrl, CancellationToken ct)
+    {
+        // "Sitio web" (t_website) tiene que existir en el catálogo global Y estar
+        // activada para esta cuenta — si no, no hay dónde guardarlo, se ignora.
+        var fieldId = await db.CustomFieldDefinitions
+            .Where(f => f.FieldCode == "t_website")
+            .Select(f => (int?)f.FieldId)
+            .FirstOrDefaultAsync(ct);
+        if (fieldId == null) return;
+
+        var isActive = await db.AccountCustomFields
+            .AnyAsync(a => a.AccountId == accountId && a.FieldId == fieldId, ct);
+        if (!isActive) return;
+
+        var existing = await db.CustomFieldValues
+            .FirstOrDefaultAsync(v => v.EntityType == "Lead" && v.EntityId == leadId && v.FieldId == fieldId, ct);
+        if (existing != null)
+        {
+            // Ya hay un valor capturado (a mano o de una corrida anterior) — no lo pisa.
+            if (!string.IsNullOrWhiteSpace(existing.Value)) return;
+            existing.Value = websiteUrl;
+        }
+        else
+        {
+            db.CustomFieldValues.Add(new CustomFieldValue
+            { EntityType = "Lead", EntityId = leadId, FieldId = fieldId.Value, Value = websiteUrl });
+        }
+        await db.SaveChangesAsync(ct);
     }
 
     private async Task FailAsync(Models.AiQuantRun run, string error, Stopwatch sw, CancellationToken ct)
