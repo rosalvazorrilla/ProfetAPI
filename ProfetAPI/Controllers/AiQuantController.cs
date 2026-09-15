@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -127,7 +128,7 @@ public class AiQuantController(
         var total = await q.CountAsync();
         var rows = await q.OrderByDescending(r => r.CreatedOn)
             .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(r => new { r.RunId, r.Status, r.Score, r.Tier, r.CostUsd, r.CreatedOn, r.RunByUserId })
+            .Select(r => new { r.RunId, r.Status, r.Score, r.Tier, r.CostUsd, r.CreatedOn, r.RunByUserId, r.ResultJson })
             .ToListAsync();
 
         var names = await ResolveUserNames(rows.Select(r => r.RunByUserId));
@@ -135,8 +136,22 @@ public class AiQuantController(
         {
             r.RunId, r.Status, r.Score, r.Tier, r.CostUsd, r.CreatedOn,
             runByName = r.RunByUserId != null && names.TryGetValue(r.RunByUserId, out var n) ? n : null,
+            // Por qué cambió el score respecto a la corrida anterior (null en la primera).
+            changesSinceLastRun = ExtractChangesSinceLastRun(r.ResultJson),
         });
         return Ok(new { total, page, pageSize, data });
+    }
+
+    private static string? ExtractChangesSinceLastRun(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(resultJson);
+            return doc.RootElement.TryGetProperty("changesSinceLastRun", out var c) && c.ValueKind == JsonValueKind.String
+                ? c.GetString() : null;
+        }
+        catch (JsonException) { return null; }
     }
 
     // ── GET /api/ai-quant/usage?customerId=&month=yyyy-MM ──────────────────────
