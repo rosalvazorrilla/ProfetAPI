@@ -28,7 +28,7 @@ public class AiQuantService(
     IConfiguration cfg,
     ILogger<AiQuantService> logger) : IAiQuantService
 {
-    private const int MaxSearches = 8;
+    private const int MaxSearches = 5;
 
     public bool IsConfigured => ai.IsConfigured;
 
@@ -170,9 +170,20 @@ public class AiQuantService(
           SAT 69-B (EFOS/EDOS) o notas negativas en prensa, repórtalo como bandera de riesgo con
           su fuente, sin opinar legalmente.
         - Todo lo que sea estimación (tamaño, valor del negocio) márcalo claramente como estimado.
-        - CITA cada afirmación relevante con su URL en "sources". Si no encuentras algo, dilo — no inventes.
+        - CITA cada afirmación relevante con su URL en "sources" (máximo 5, las más relevantes).
+          Si no encuentras algo, dilo — no inventes.
         - Usa la búsqueda web. Empieza por el dominio del correo y el nombre de la empresa.
         - Responde en español.
+
+        SÉ BREVE. Este texto lo lee un vendedor entre llamadas, no un reporte de consultoría:
+        frases cortas y directas, sin relleno ni justificaciones largas. Límites estrictos:
+        - "salesSignal", "sizeReasoning", "howToReach", "firstApproachAngle": UNA frase de máximo
+          20 palabras cada una. Ve directo al punto accionable, sin antecedentes.
+        - "summary": máximo 2 frases cortas (no un párrafo).
+        - "riskFlags", "commercialTips", "alerts", "doNotDo": máximo 3 elementos cada uno, cada
+          uno una frase de máximo 15 palabras.
+        - "scoreBreakdown": máximo 5 dimensiones, "note" de máximo 12 palabras.
+        No repitas en un campo lo que ya dijiste en otro.
 
         El "quantScore" (0-100) es tu juicio cualitativo del atractivo comercial de este
         prospecto (tamaño del negocio, seriedad/legitimidad, relevancia en su sector, encaje).
