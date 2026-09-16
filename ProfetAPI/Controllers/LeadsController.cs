@@ -1108,29 +1108,39 @@ public class LeadsController : ControllerBase
 
         if (model == null) return Ok(new { hasScoring = false, questions = Array.Empty<object>(), totalPoints = 0m });
 
-        // Questions with options
-        var questions = await _context.ScoringQuestions
+        // Preguntas y opciones en dos consultas planas, no una proyección anidada
+        // (q.AnswerOptions.Select(...) por cada pregunta). ScoringAnswerOptions
+        // tiene ~3.6M de filas — con el índice de QuestionId, un WHERE IN plano
+        // es instantáneo, pero la subconsulta correlacionada por fila que EF
+        // generaba para la proyección anidada tardaba 12-16 s por cada carga de
+        // esta pantalla (confirmado: mismo filtro en SQL directo = 0 ms).
+        var questionRows = await _context.ScoringQuestions
             .AsNoTracking()
             .Where(q => q.ScoringModelId == model.ScoringModelId)
             .OrderBy(q => q.OrderPosition)
-            .Select(q => new
-            {
-                q.QuestionId,
-                q.QuestionText,
-                q.QuestionType,
-                q.IsRequired,
-                q.OrderPosition,
-                options = q.AnswerOptions
-                    .OrderBy(o => o.OrderPosition)
-                    .Select(o => new
-                    {
-                        o.AnswerOptionId,
-                        o.AnswerText,
-                        o.Points,
-                        o.OrderPosition,
-                    }).ToList(),
-            })
+            .Select(q => new { q.QuestionId, q.QuestionText, q.QuestionType, q.IsRequired, q.OrderPosition })
             .ToListAsync();
+
+        var questionIds = questionRows.Select(q => q.QuestionId).ToList();
+        var optionRows = await _context.ScoringAnswerOptions
+            .AsNoTracking()
+            .Where(o => questionIds.Contains(o.QuestionId))
+            .OrderBy(o => o.OrderPosition)
+            .Select(o => new { o.QuestionId, o.AnswerOptionId, o.AnswerText, o.Points, o.OrderPosition })
+            .ToListAsync();
+        var optionsByQuestion = optionRows.GroupBy(o => o.QuestionId).ToDictionary(g => g.Key, g => g.ToList());
+
+        var questions = questionRows.Select(q => new
+        {
+            q.QuestionId,
+            q.QuestionText,
+            q.QuestionType,
+            q.IsRequired,
+            q.OrderPosition,
+            options = (optionsByQuestion.TryGetValue(q.QuestionId, out var opts) ? opts : new())
+                .Select(o => new { o.AnswerOptionId, o.AnswerText, o.Points, o.OrderPosition })
+                .ToList(),
+        }).ToList();
 
         // Current answers for this lead
         var currentAnswers = await _context.LeadScoringAnswers
