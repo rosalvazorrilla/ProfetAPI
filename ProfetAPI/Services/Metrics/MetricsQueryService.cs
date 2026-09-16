@@ -8,18 +8,99 @@ namespace ProfetAPI.Services.Metrics;
 /// Motor de consultas de métricas: ejecuta EF parametrizado, SIEMPRE con AccountId, solo con
 /// medidas/dimensiones del catálogo (whitelist). Nunca construye SQL desde strings del cliente/IA.
 /// </summary>
-public class MetricsQueryService(ApplicationDbContext db)
+public class MetricsQueryService(ApplicationDbContext db, MetaAdsService metaAds)
 {
     public async Task<MetricSeriesDto> RunAsync(MetricQueryDto q, int accountId)
     {
         var result = new MetricSeriesDto { ChartType = q.ChartType, Measure = q.Measure, Dimension = q.Dimension };
         var dim = q.ChartType == "kpi" ? null : q.Dimension;
 
+        if (q.Measure.StartsWith("meta_"))        { await RunMetaAsync(q, accountId, dim, result); return result; }
+        if (q.Measure.StartsWith("google_"))      { await RunGoogleLeadsAsync(q, accountId, dim, result); return result; }
+
         var isDeal = q.Measure is "deals_open" or "deals_won" or "deals_lost" or "deals_amount" or "win_rate";
         if (isDeal) await RunDealAsync(q, accountId, dim, result);
         else        await RunLeadAsync(q, accountId, dim, result);
 
         return result;
+    }
+
+    // ── Medidas de META ADS ───────────────────────────────────────────────────
+    private async Task RunMetaAsync(MetricQueryDto q, int accountId, string? dim, MetricSeriesDto result)
+    {
+        if (q.Measure == "meta_leads")
+        {
+            var query = db.Leads.AsNoTracking()
+                .Where(l => l.AccountId == accountId && l.Deleted != true && l.ProspectSource == "Meta Lead Ads");
+            if (q.From != null) query = query.Where(l => l.CreatedOn >= q.From);
+            if (q.To   != null) query = query.Where(l => l.CreatedOn <= q.To);
+
+            if (dim == null)
+            {
+                result.Total = await query.CountAsync();
+                result.Labels.Add("Total"); result.Values.Add(result.Total);
+                return;
+            }
+            List<(string, decimal)> rows = dim == "campaign"
+                ? (await query.GroupBy(l => l.CampaignName ?? "Sin campaña")
+                    .Select(g => new { g.Key, V = (decimal)g.Count() }).ToListAsync())
+                    .Select(x => (x.Key!, x.V)).ToList()
+                : (await query.GroupBy(l => new { l.CreatedOn.Year, l.CreatedOn.Month })
+                    .OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month)
+                    .Select(g => new { g.Key, V = (decimal)g.Count() }).ToListAsync())
+                    .Select(x => ($"{x.Key.Year}-{x.Key.Month:D2}", x.V)).ToList();
+            Fill(result, rows, dim == "time");
+            return;
+        }
+
+        // meta_spend / meta_clicks — en vivo desde el Graph API (MetaAdsService), solo
+        // por campaña (esa llamada trae un total del rango, no desglose diario).
+        var account = await db.Accounts.AsNoTracking()
+            .Where(a => a.AccountId == accountId)
+            .Select(a => a.MetaAdAccountId).FirstOrDefaultAsync();
+        var token = await db.AccountWebhooks.AsNoTracking()
+            .Where(w => w.AccountId == accountId && w.Platform == "MetaLeadAds" && w.IsActive && w.MetaPageAccessToken != null)
+            .Select(w => w.MetaPageAccessToken).FirstOrDefaultAsync();
+
+        if (string.IsNullOrWhiteSpace(account) || token == null) { result.Labels.Add("Total"); result.Values.Add(0); return; }
+
+        var from = q.From ?? DateTime.UtcNow.AddDays(-30);
+        var to   = q.To   ?? DateTime.UtcNow;
+        var (data, err) = await metaAds.GetCampaignInsightsAsync(account, token, from, to);
+        if (err != null || data.Count == 0) { result.Labels.Add("Total"); result.Values.Add(0); return; }
+
+        decimal Value(MetaAdsService.CampaignInsight c) => q.Measure == "meta_spend" ? Math.Round(c.Spend, 2) : c.Clicks;
+
+        if (dim == null)
+        {
+            result.Total = data.Sum(Value);
+            result.Labels.Add("Total"); result.Values.Add(result.Total);
+            return;
+        }
+        var camRows = data.Select(c => (c.CampaignName, Value(c))).ToList();
+        Fill(result, camRows, false);
+    }
+
+    // ── Medidas de GOOGLE ADS (leads ya en el CRM, etiquetados por fuente) ──────
+    private async Task RunGoogleLeadsAsync(MetricQueryDto q, int accountId, string? dim, MetricSeriesDto result)
+    {
+        var query = db.Leads.AsNoTracking()
+            .Where(l => l.AccountId == accountId && l.Deleted != true
+                     && l.ProspectSource != null && l.ProspectSource.Contains("Google"));
+        if (q.From != null) query = query.Where(l => l.CreatedOn >= q.From);
+        if (q.To   != null) query = query.Where(l => l.CreatedOn <= q.To);
+
+        if (dim == null)
+        {
+            result.Total = await query.CountAsync();
+            result.Labels.Add("Total"); result.Values.Add(result.Total);
+            return;
+        }
+        var rows = (await query.GroupBy(l => new { l.CreatedOn.Year, l.CreatedOn.Month })
+            .OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month)
+            .Select(g => new { g.Key, V = (decimal)g.Count() }).ToListAsync())
+            .Select(x => ($"{x.Key.Year}-{x.Key.Month:D2}", x.V)).ToList();
+        Fill(result, rows, true);
     }
 
     // ── Medidas de LEADS ──────────────────────────────────────────────────────
