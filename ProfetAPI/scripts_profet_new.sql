@@ -139,6 +139,13 @@
 --   grandfathering (función nueva). EJECUTADA (corrida por Claude vía sqlcmd,
 --   confirmada con sys.tables/sys.columns + SELECT del Feature/AddOn). Texto
 --   completo del DDL: ver historial de conversación / git blame.
+-- 2026-09-16 — Enlace real Lead → Compañía: columna dbo.Leads.CompanyId INT
+--   NULL + FK_Leads_Companies (Leads.CompanyId → Companies.CompanyId) +
+--   IX_Leads_CompanyId. Se autocompleta sola (ApplicationDBContext.SaveChangesAsync
+--   override) cuando el campo de texto libre "Company" llega lleno y el lead
+--   no tenía ya un CompanyId — crea la Compañía si no existe una con ese
+--   nombre, o la liga si ya existe. Nunca pisa un CompanyId ya asignado.
+--   EJECUTADA (corrida por Claude vía sqlcmd, confirmada con sys.columns).
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- (nada pendiente por ahora)

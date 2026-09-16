@@ -142,6 +142,49 @@ namespace ProfetAPI.Data
 
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
 
+        // Se autoliga (o crea) la Compañía de un lead cuando llega/se edita el campo de
+        // texto libre "Company" y el lead todavía no tiene CompanyId. Centralizado aquí
+        // (no en cada controller que crea/edita leads: manual, webhooks, import, API
+        // externa, automatizaciones) para que ningún camino de creación se quede sin
+        // este comportamiento. Nunca pisa un CompanyId ya asignado — si alguien ligó la
+        // compañía a mano o quiere separarla, esto no lo vuelve a tocar.
+        public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            await LinkLeadCompaniesAsync(cancellationToken);
+            return await base.SaveChangesAsync(cancellationToken);
+        }
+
+        private async Task LinkLeadCompaniesAsync(CancellationToken ct)
+        {
+            var candidates = ChangeTracker.Entries<Lead>()
+                .Where(e => (e.State == EntityState.Added || e.State == EntityState.Modified)
+                            && e.Entity.CompanyId == null
+                            && !string.IsNullOrWhiteSpace(e.Entity.Company))
+                .Select(e => e.Entity)
+                .ToList();
+            if (candidates.Count == 0) return;
+
+            foreach (var lead in candidates)
+            {
+                var name = lead.Company!.Trim();
+                var company = await Companies.FirstOrDefaultAsync(c => c.Name == name, ct);
+                if (company == null)
+                {
+                    company = new Company
+                    {
+                        Name = name,
+                        LifecycleStatus = "Prospecto",
+                        CreatedOn = DateTime.UtcNow,
+                        ModifiedOn = DateTime.UtcNow,
+                    };
+                    Companies.Add(company);
+                    // Necesitamos el CompanyId real (IDENTITY) antes de asignarlo al lead.
+                    await base.SaveChangesAsync(ct);
+                }
+                lead.CompanyId = company.CompanyId;
+            }
+        }
+
         protected override void OnModelCreating(ModelBuilder builder)
         {
             base.OnModelCreating(builder);

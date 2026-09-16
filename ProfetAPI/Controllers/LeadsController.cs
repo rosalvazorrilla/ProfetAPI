@@ -527,7 +527,7 @@ public class LeadsController : ControllerBase
                 l.LeadId, l.Name, l.Email, l.Phone, l.Company,
                 l.Position, l.City, l.Status, l.OriginType,
                 l.ProspectSource, l.AdName, l.InitialMessage,
-                l.AccountId, l.OwnerUserId, l.ContactId,
+                l.AccountId, l.OwnerUserId, l.ContactId, l.CompanyId,
                 l.StageId, l.CampaignId, l.LifecycleStatus,
                 l.CreatedOn, l.SequencePaused,
             })
@@ -572,6 +572,18 @@ public class LeadsController : ControllerBase
                     c.PhoneNumber, c.Position, c.CompanyId,
                     companyName = c.Company != null ? c.Company.Name : null,
                 })
+                .FirstOrDefaultAsync();
+        }
+
+        // Compañía real del CRM ligada (autocompletada o ligada a mano) — distinta
+        // del campo de texto libre "company" de arriba, que sigue viniendo tal cual.
+        object? linkedCompanyObj = null;
+        if (lead.CompanyId.HasValue)
+        {
+            linkedCompanyObj = await _context.Companies
+                .AsNoTracking()
+                .Where(c => c.CompanyId == lead.CompanyId.Value)
+                .Select(c => new { c.CompanyId, c.Name, c.Website, c.City, c.LifecycleStatus })
                 .FirstOrDefaultAsync();
         }
 
@@ -624,6 +636,7 @@ public class LeadsController : ControllerBase
             sequencePaused = lead.SequencePaused,
             owner          = ownerObj,
             contact        = contactObj,
+            linkedCompany  = linkedCompanyObj,
             tags,
             scoringTotal,
             accountUsers,

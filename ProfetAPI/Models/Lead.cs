@@ -35,6 +35,16 @@ public class Lead
     public string? ProspectSource { get; set; }
     public string? AdName { get; set; }
     public string? Company { get; set; }
+
+    /// <summary>Compañía real del CRM (tabla Companies) ligada a este lead — se
+    /// autocompleta/crea sola cuando llega el campo Company de texto lleno; nunca
+    /// pisa un enlace ya hecho (ver ApplicationDBContext.LinkLeadCompaniesAsync).
+    /// El nav se llama "CompanyRef", no "Company" — ese nombre ya lo usa el campo
+    /// de texto libre de arriba.</summary>
+    public int? CompanyId { get; set; }
+    [ForeignKey(nameof(CompanyId))]
+    public virtual Company? CompanyRef { get; set; }
+
     public string? Position { get; set; }
     public string? City { get; set; }
     public long CampaignId { get; set; }
