@@ -146,6 +146,13 @@
 --   no tenía ya un CompanyId — crea la Compañía si no existe una con ese
 --   nombre, o la liga si ya existe. Nunca pisa un CompanyId ya asignado.
 --   EJECUTADA (corrida por Claude vía sqlcmd, confirmada con sys.columns).
+-- 2026-09-16 (2) — Compañías sin cuenta propia: columna dbo.Companies.AccountId
+--   INT NULL + FK_Companies_Accounts + IX_Companies_AccountId. Antes una
+--   compañía creada a mano ("+ Nueva compañía") no tenía NINGUNA forma de
+--   aparecer en ningún listado por cuenta — GetCompanies solo la encontraba
+--   vía Deals.CompanyId. Ahora también cuenta si Company.AccountId coincide,
+--   o si algún Lead de la cuenta ya la liga (Leads.CompanyId). EJECUTADA
+--   (corrida por Claude vía sqlcmd, confirmada con sys.columns).
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- (nada pendiente por ahora)

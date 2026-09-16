@@ -51,17 +51,21 @@ public class CompaniesController : ControllerBase
             resolvedAccountId = assignment.AccountId;
         }
 
-        // Companies linked to deals from this account
-        var companyIds = await _context.Deals
-            .AsNoTracking()
+        // Compañías "de" esta cuenta: creadas directamente para ella (AccountId), o
+        // conocidas indirectamente porque algún Lead o Deal de la cuenta ya las liga.
+        // Sin las tres vías, una compañía creada a mano nunca aparecía en ningún lado
+        // (Company no tenía AccountId propio hasta ahora).
+        var dealCompanyIds = await _context.Deals.AsNoTracking()
             .Where(d => d.AccountId == resolvedAccountId && d.CompanyId != null)
-            .Select(d => d.CompanyId!.Value)
-            .Distinct()
-            .ToListAsync();
+            .Select(d => d.CompanyId!.Value).ToListAsync();
+        var leadCompanyIds = await _context.Leads.AsNoTracking()
+            .Where(l => l.AccountId == resolvedAccountId && l.CompanyId != null)
+            .Select(l => l.CompanyId!.Value).ToListAsync();
+        var companyIds = dealCompanyIds.Union(leadCompanyIds).Distinct().ToList();
 
         var query = _context.Companies
             .AsNoTracking()
-            .Where(c => companyIds.Contains(c.CompanyId));
+            .Where(c => c.AccountId == resolvedAccountId || companyIds.Contains(c.CompanyId));
 
         if (!string.IsNullOrWhiteSpace(search))
         {
@@ -131,8 +135,16 @@ public class CompaniesController : ControllerBase
     [SwaggerResponse(201, "Empresa creada")]
     public async Task<IActionResult> CreateCompany([FromBody] CompanyUpsertDto model)
     {
+        if (model.AccountId.HasValue && !IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == model.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
         var company = new Company
         {
+            AccountId       = model.AccountId,
             Name            = model.Name,
             Website         = model.Website,
             PhoneNumber     = model.PhoneNumber,
@@ -177,6 +189,9 @@ public class CompaniesController : ControllerBase
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 public class CompanyUpsertDto
 {
+    /// <summary>Solo se usa al crear — de qué cuenta es esta compañía. Sin esto la
+    /// compañía queda huérfana y no aparece en ningún listado por cuenta.</summary>
+    public int? AccountId           { get; set; }
     public string Name             { get; set; } = null!;
     public string? Website         { get; set; }
     public string? PhoneNumber     { get; set; }

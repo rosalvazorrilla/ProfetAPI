@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ProfetAPI.Models;
 
@@ -6,6 +7,14 @@ public class Company
 {
     [Key]
     public int CompanyId { get; set; }
+
+    /// <summary>Cuenta dueña de esta compañía cuando se crea a mano ("+ Nueva compañía").
+    /// Null en compañías viejas que solo se conocen por sus Deals/Leads ligados — GetCompanies
+    /// las encuentra igual por esa vía. Sin este campo, una compañía creada directamente no
+    /// tenía NINGUNA forma de aparecer en ningún listado por cuenta.</summary>
+    public int? AccountId { get; set; }
+    [ForeignKey(nameof(AccountId))]
+    public virtual Account? Account { get; set; }
 
     [Required]
     public string Name { get; set; } = null!;
