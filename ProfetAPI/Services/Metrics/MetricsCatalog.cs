@@ -20,6 +20,8 @@ public class MetricsCatalog(ApplicationDbContext db)
     private static readonly string[] MetaLeadDims  = { "campaign", "time" };
     private static readonly string[] MetaSpendDims = { "campaign" };
     private static readonly string[] GoogleLeadDims = { "time" };
+    // Google Ads sí trae desglose por campaña Y por día (GoogleAdsService.GetCampaignDailyInsightsAsync).
+    private static readonly string[] GoogleAdsDims = { "campaign", "time" };
 
     public static readonly List<CatalogMeasureDto> Measures = new()
     {
@@ -35,6 +37,9 @@ public class MetricsCatalog(ApplicationDbContext db)
         new() { Key = "meta_spend",      Label = "Inversión Meta Ads",     Source = "meta", Format = "money",  SupportedDimensions = MetaSpendDims.ToList() },
         new() { Key = "meta_clicks",     Label = "Clics Meta Ads",         Source = "meta", Format = "number", SupportedDimensions = MetaSpendDims.ToList() },
         new() { Key = "google_leads",    Label = "# Leads de Google Ads",  Source = "google", Format = "number", SupportedDimensions = GoogleLeadDims.ToList() },
+        new() { Key = "google_cost",         Label = "Inversión Google Ads",    Source = "google", Format = "money",  SupportedDimensions = GoogleAdsDims.ToList() },
+        new() { Key = "google_clicks",       Label = "Clics Google Ads",        Source = "google", Format = "number", SupportedDimensions = GoogleAdsDims.ToList() },
+        new() { Key = "google_conversions",  Label = "Conversiones Google Ads", Source = "google", Format = "number", SupportedDimensions = GoogleAdsDims.ToList() },
     };
 
     public static readonly List<CatalogItemDto> Dimensions = new()
@@ -70,8 +75,13 @@ public class MetricsCatalog(ApplicationDbContext db)
 
         // meta_leads/google_leads cuentan de los Leads ya en el CRM aunque la cuenta
         // publicitaria no esté conectada (el lead ya llegó etiquetado con esa fuente) —
-        // solo meta_spend/meta_clicks (llaman al Graph API en vivo) sí exigen la conexión.
-        var measures = Measures.Where(m => m.Key is not ("meta_spend" or "meta_clicks") || hasMeta).ToList();
+        // solo las medidas que llaman a la API en vivo exigen la conexión real.
+        var liveMetaKeys   = new[] { "meta_spend", "meta_clicks" };
+        var liveGoogleKeys = new[] { "google_cost", "google_clicks", "google_conversions" };
+        var measures = Measures
+            .Where(m => !liveMetaKeys.Contains(m.Key) || hasMeta)
+            .Where(m => !liveGoogleKeys.Contains(m.Key) || hasGoogle)
+            .ToList();
 
         return new MetricsCatalogDto
         {

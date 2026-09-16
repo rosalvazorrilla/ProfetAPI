@@ -85,6 +85,7 @@ builder.Services.AddScoped<ProfetAPI.Services.IWebhookDispatcherService, ProfetA
 
 // --- 5e. Meta Ads Insights ---
 builder.Services.AddScoped<ProfetAPI.Services.MetaAdsService>();
+builder.Services.AddScoped<ProfetAPI.Services.GoogleAdsService>();
 builder.Services.AddScoped<ProfetAPI.Services.AutomationExecutorService>();
 builder.Services.AddScoped<ProfetAPI.Services.PlaybookService>();
 

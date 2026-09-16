@@ -8,15 +8,16 @@ namespace ProfetAPI.Services.Metrics;
 /// Motor de consultas de métricas: ejecuta EF parametrizado, SIEMPRE con AccountId, solo con
 /// medidas/dimensiones del catálogo (whitelist). Nunca construye SQL desde strings del cliente/IA.
 /// </summary>
-public class MetricsQueryService(ApplicationDbContext db, MetaAdsService metaAds)
+public class MetricsQueryService(ApplicationDbContext db, MetaAdsService metaAds, GoogleAdsService googleAds)
 {
     public async Task<MetricSeriesDto> RunAsync(MetricQueryDto q, int accountId)
     {
         var result = new MetricSeriesDto { ChartType = q.ChartType, Measure = q.Measure, Dimension = q.Dimension };
         var dim = q.ChartType == "kpi" ? null : q.Dimension;
 
-        if (q.Measure.StartsWith("meta_"))        { await RunMetaAsync(q, accountId, dim, result); return result; }
-        if (q.Measure.StartsWith("google_"))      { await RunGoogleLeadsAsync(q, accountId, dim, result); return result; }
+        if (q.Measure.StartsWith("meta_"))                                       { await RunMetaAsync(q, accountId, dim, result); return result; }
+        if (q.Measure == "google_leads")                                         { await RunGoogleLeadsAsync(q, accountId, dim, result); return result; }
+        if (q.Measure is "google_cost" or "google_clicks" or "google_conversions") { await RunGoogleAdsInsightsAsync(q, accountId, dim, result); return result; }
 
         var isDeal = q.Measure is "deals_open" or "deals_won" or "deals_lost" or "deals_amount" or "win_rate";
         if (isDeal) await RunDealAsync(q, accountId, dim, result);
@@ -101,6 +102,46 @@ public class MetricsQueryService(ApplicationDbContext db, MetaAdsService metaAds
             .Select(g => new { g.Key, V = (decimal)g.Count() }).ToListAsync())
             .Select(x => ($"{x.Key.Year}-{x.Key.Month:D2}", x.V)).ToList();
         Fill(result, rows, true);
+    }
+
+    // google_cost / google_clicks / google_conversions — en vivo desde la API de Google
+    // Ads (GoogleAdsService), con desglose real por campaña y por día.
+    private async Task RunGoogleAdsInsightsAsync(MetricQueryDto q, int accountId, string? dim, MetricSeriesDto result)
+    {
+        var from = q.From ?? DateTime.UtcNow.AddDays(-30);
+        var to   = q.To   ?? DateTime.UtcNow;
+        var (data, err) = await googleAds.GetCampaignDailyInsightsAsync(accountId, from, to);
+        if (err != null || data.Count == 0) { result.Labels.Add("Total"); result.Values.Add(0); return; }
+
+        decimal Value(GoogleAdsService.CampaignDayInsight c) => q.Measure switch
+        {
+            "google_cost"        => Math.Round(c.Cost, 2),
+            "google_clicks"      => c.Clicks,
+            "google_conversions" => (decimal)c.Conversions,
+            _ => 0m,
+        };
+
+        if (dim == null)
+        {
+            result.Total = data.Sum(Value);
+            result.Labels.Add("Total"); result.Values.Add(result.Total);
+            return;
+        }
+
+        List<(string, decimal)> rows;
+        if (dim == "campaign")
+        {
+            rows = data.GroupBy(c => c.CampaignName)
+                .Select(g => (g.Key, g.Sum(Value))).ToList();
+            Fill(result, rows, false);
+        }
+        else // time — por mes, igual que el resto de medidas de la misma dimensión
+        {
+            rows = data.GroupBy(c => new { c.Date.Year, c.Date.Month })
+                .OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month)
+                .Select(g => ($"{g.Key.Year}-{g.Key.Month:D2}", g.Sum(Value))).ToList();
+            Fill(result, rows, true);
+        }
     }
 
     // ── Medidas de LEADS ──────────────────────────────────────────────────────
