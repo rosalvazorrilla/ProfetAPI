@@ -24,6 +24,10 @@ public class MetricSeriesDto
     public List<string>  Labels    { get; set; } = new();
     public List<decimal> Values    { get; set; } = new();
     public decimal       Total     { get; set; }
+
+    /// <summary>Null salvo cuando una medida en vivo (Meta/Google Ads) no pudo consultar
+    /// la API real — así el frontend distingue "de verdad es 0" de "no se pudo leer".</summary>
+    public string?        Warning   { get; set; }
 }
 
 // ── Catálogo ──────────────────────────────────────────────────────────────────

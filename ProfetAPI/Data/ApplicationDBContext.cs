@@ -148,6 +148,10 @@ namespace ProfetAPI.Data
         // externa, automatizaciones) para que ningún camino de creación se quede sin
         // este comportamiento. Nunca pisa un CompanyId ya asignado — si alguien ligó la
         // compañía a mano o quiere separarla, esto no lo vuelve a tocar.
+        // OJO: solo se intercepta este overload (el que usa todo el código hoy). Si algún
+        // día se llama directo a SaveChangesAsync(bool, CancellationToken), este hook NO
+        // se dispara — no hay ningún código que lo haga hoy (verificado), pero avisar si
+        // se agrega uno nuevo.
         public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
             await LinkLeadCompaniesAsync(cancellationToken);

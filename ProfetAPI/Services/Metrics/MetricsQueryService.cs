@@ -63,12 +63,17 @@ public class MetricsQueryService(ApplicationDbContext db, MetaAdsService metaAds
             .Where(w => w.AccountId == accountId && w.Platform == "MetaLeadAds" && w.IsActive && w.MetaPageAccessToken != null)
             .Select(w => w.MetaPageAccessToken).FirstOrDefaultAsync();
 
-        if (string.IsNullOrWhiteSpace(account) || token == null) { result.Labels.Add("Total"); result.Values.Add(0); return; }
+        if (string.IsNullOrWhiteSpace(account) || token == null)
+        { result.Warning = "Meta Ads no está conectado."; result.Labels.Add("Total"); result.Values.Add(0); return; }
 
         var from = q.From ?? DateTime.UtcNow.AddDays(-30);
         var to   = q.To   ?? DateTime.UtcNow;
         var (data, err) = await metaAds.GetCampaignInsightsAsync(account, token, from, to);
-        if (err != null || data.Count == 0) { result.Labels.Add("Total"); result.Values.Add(0); return; }
+        // Un error real (token vencido, API caída) es distinto de "de verdad no hay datos" —
+        // antes los dos casos se veían igual en la gráfica (0 sin explicación).
+        if (err != null)
+        { result.Warning = "No se pudo leer Meta Ads en este momento — intenta reconectar la cuenta."; result.Labels.Add("Total"); result.Values.Add(0); return; }
+        if (data.Count == 0) { result.Labels.Add("Total"); result.Values.Add(0); return; }
 
         decimal Value(MetaAdsService.CampaignInsight c) => q.Measure == "meta_spend" ? Math.Round(c.Spend, 2) : c.Clicks;
 
@@ -111,7 +116,15 @@ public class MetricsQueryService(ApplicationDbContext db, MetaAdsService metaAds
         var from = q.From ?? DateTime.UtcNow.AddDays(-30);
         var to   = q.To   ?? DateTime.UtcNow;
         var (data, err) = await googleAds.GetCampaignDailyInsightsAsync(accountId, from, to);
-        if (err != null || data.Count == 0) { result.Labels.Add("Total"); result.Values.Add(0); return; }
+        if (err != null)
+        {
+            result.Warning = err == "not_connected"
+                ? "Google Ads no está conectado."
+                : "No se pudo leer Google Ads en este momento — intenta reconectar la cuenta.";
+            result.Labels.Add("Total"); result.Values.Add(0);
+            return;
+        }
+        if (data.Count == 0) { result.Labels.Add("Total"); result.Values.Add(0); return; }
 
         decimal Value(GoogleAdsService.CampaignDayInsight c) => q.Measure switch
         {
