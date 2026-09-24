@@ -322,6 +322,49 @@ public class DashboardController : ControllerBase
             .Select(a => (int?)a.AccountId).FirstOrDefaultAsync();
     }
 
+    // ── GET /api/dashboard/best-practices?accountId= — alertas + tareas pendientes ──
+    [HttpGet("best-practices")]
+    [SwaggerOperation(Summary = "Alertas de buenas prácticas de seguimiento y tareas pendientes del usuario")]
+    public async Task<IActionResult> GetBestPractices([FromQuery] int? accountId)
+    {
+        var acId = await ResolveLayoutAccount(accountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta." });
+
+        var now = DateTime.UtcNow;
+        // Solo prospectos pendientes (mismo criterio que la lista: sin Convertido/Perdido/No calificado)
+        var open = _db.Leads.AsNoTracking().Where(l => l.AccountId == acId && (l.Deleted ?? false) == false
+            && l.Status != "Convertido" && l.Status != "Perdido" && l.Status != "No calificado");
+
+        var newOver1h  = open.Where(l => l.Status == "Nuevo" && l.CreatedOn < now.AddHours(-1) && l.CreatedOn >= now.AddHours(-24));
+        var newOver24h = open.Where(l => l.Status == "Nuevo" && l.CreatedOn < now.AddHours(-24));
+        var unassigned = open.Where(l => l.OwnerUserId == null);
+        var qualified  = open.Where(l => l.Status == "Calificado");
+
+        var alerts = new List<object>();
+        async Task Add(string key, IQueryable<ProfetAPI.Models.Lead> q)
+        {
+            var count = await q.CountAsync();
+            if (count > 0) alerts.Add(new { key, count, leads = await q.OrderBy(l => l.CreatedOn).Take(5)
+                .Select(l => new { l.LeadId, l.Name, l.CreatedOn }).ToListAsync() });
+        }
+        await Add("newOver24h", newOver24h);
+        await Add("newOver1h", newOver1h);
+        await Add("unassigned", unassigned);
+        await Add("qualified", qualified);
+
+        var myTasksQ = _db.Activities.AsNoTracking().Where(a => a.AccountId == acId && a.AssignedToUserId == CurrentUserId
+            && (a.TaskStatus == "Pendiente" || a.TaskStatus == "En progreso"));
+        var overdue = await myTasksQ.CountAsync(a => a.DueDate != null && a.DueDate < now);
+        var tasks = await myTasksQ
+            .OrderBy(a => a.DueDate == null).ThenBy(a => a.DueDate)
+            .Take(6)
+            .Select(a => new { a.ActivityId, a.Subject, a.Priority, a.TaskStatus, a.DueDate, a.EntityType, a.EntityId, a.ActionType })
+            .ToListAsync();
+        var pendingTotal = await myTasksQ.CountAsync();
+
+        return Ok(new { alerts, tasks, pendingTotal, overdue });
+    }
+
     // ── GET /api/dashboard/quality?accountId=&days=30 — KPIs de calidad (tier/score) ──
     [HttpGet("quality")]
     [SwaggerOperation(Summary = "KPIs de calidad de lead: distribución por tier, score promedio y conversión por tier")]
