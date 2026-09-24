@@ -1011,6 +1011,64 @@ public class LeadsController : ControllerBase
         return Ok(new { queued = leads.Count });
     }
 
+    // POST /api/leads/{id}/whatsapp-contact — abre (o crea) la conversación de WhatsApp del prospecto
+    [HttpPost("{id:long}/whatsapp-contact")]
+    [SwaggerOperation(Summary = "Obtener/crear el contacto de WhatsApp del prospecto (para abrir su conversación en el Inbox)")]
+    public async Task<IActionResult> EnsureWhatsappContact(long id)
+    {
+        var lead = await _context.Leads.FirstOrDefaultAsync(l => l.LeadId == id && (l.Deleted ?? false) == false);
+        if (lead == null) return NotFound(new { message = "Prospecto no encontrado." });
+        if (!lead.AccountId.HasValue) return BadRequest(new { message = "El prospecto no tiene cuenta asignada." });
+
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == lead.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return Forbid();
+        }
+
+        var digits = new string((lead.Phone ?? "").Where(char.IsDigit).ToArray());
+        if (digits.Length < 8) return BadRequest(new { message = "El prospecto no tiene un teléfono válido para WhatsApp." });
+        var normalized = digits.Length == 10 ? "+52" + digits : "+" + digits;
+        var tail = digits.Length >= 10 ? digits[^10..] : digits;
+
+        var customerId = await _context.Accounts.Where(a => a.AccountId == lead.AccountId.Value)
+            .Select(a => a.CustomerId).FirstAsync();
+        var whatsappNumber = await _context.Customers.Where(c => c.Id == customerId)
+            .Select(c => c.WhatsappNumber).FirstOrDefaultAsync();
+        if (string.IsNullOrEmpty(whatsappNumber))
+            return BadRequest(new { message = "Este cliente no tiene WhatsApp configurado." });
+
+        var wa = await _context.ContactsWhatsapp
+            .FirstOrDefaultAsync(c => c.CustomerId == customerId && c.PhoneNumber.EndsWith(tail));
+        var created = false;
+        if (wa == null)
+        {
+            var parts = (lead.Name ?? "").Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            wa = new ContactWhatsapp
+            {
+                PhoneNumber = normalized.Length > 20 ? normalized[..20] : normalized,
+                FirstName   = parts.Length > 0 ? parts[0] : null,
+                LastName    = parts.Length > 1 ? parts[1] : null,
+                Email       = lead.Email,
+                CustomerId  = customerId,
+                AccountId   = lead.AccountId,
+                LeadId      = lead.LeadId,
+                CreatedAt   = DateTime.UtcNow,
+            };
+            _context.ContactsWhatsapp.Add(wa);
+            created = true;
+        }
+        else
+        {
+            // Ya existía (p. ej. escribió primero): solo se completa lo que le falta, sin pisar nada.
+            wa.LeadId    ??= lead.LeadId;
+            wa.AccountId ??= lead.AccountId;
+        }
+        await _context.SaveChangesAsync();
+        return Ok(new { whatsappContactId = wa.Id, created });
+    }
+
     // PATCH /api/leads/{id}/status  — actualizar estatus
     [HttpPatch("{id:long}/status")]
     [SwaggerOperation(Summary = "Actualizar estatus del prospecto")]
