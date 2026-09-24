@@ -118,9 +118,9 @@ public class LeadsController : ControllerBase
             query = query.Where(l => l.Status == status);
         else
             // Un lead "Convertido" ya es un Deal — sin filtro explícito no debe
-            // seguir apareciendo en la lista de prospectos activos. Si alguien
-            // quiere verlos, puede elegir "Convertido" en el filtro de estatus.
-            query = query.Where(l => l.Status != "Convertido");
+            // seguir apareciendo en la lista de prospectos activos; igual un "Perdido". Si alguien
+            // quiere verlos, puede elegir "Convertido"/"Perdido" en el filtro de estatus.
+            query = query.Where(l => l.Status != "Convertido" && l.Status != "Perdido");
         if (!string.IsNullOrWhiteSpace(prospectSource))
             query = query.Where(l => l.ProspectSource == prospectSource);
         if (unassigned)
