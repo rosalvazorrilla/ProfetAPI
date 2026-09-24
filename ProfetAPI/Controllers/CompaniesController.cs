@@ -20,6 +20,23 @@ public class CompaniesController : ControllerBase
     private string? CurrentUserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
     private bool IsAdminGlobal => CurrentUserRole == "AdminGlobal";
 
+    /// <summary>Cuentas a las que pertenece el usuario (null = AdminGlobal, sin restricción).</summary>
+    private async Task<List<int>?> MyAccountIdsAsync()
+    {
+        if (IsAdminGlobal) return null;
+        return await _context.AccountInternalUsers.Where(a => a.UserId == CurrentUserId)
+            .Select(a => a.AccountId).ToListAsync();
+    }
+
+    /// <summary>¿La compañía es de alguna de estas cuentas? Directa (AccountId) o, para datos
+    /// anteriores al aislamiento, porque un Lead/Deal de la cuenta la liga.</summary>
+    private async Task<bool> CompanyVisibleAsync(int companyId, int? companyAccountId, List<int> accounts)
+    {
+        if (companyAccountId.HasValue) return accounts.Contains(companyAccountId.Value);
+        return await _context.Leads.AnyAsync(l => l.CompanyId == companyId && l.AccountId != null && accounts.Contains(l.AccountId.Value))
+            || await _context.Deals.AnyAsync(d => d.CompanyId == companyId && accounts.Contains(d.AccountId));
+    }
+
     // GET /api/companies?accountId=&search=&page=1&pageSize=50
     [HttpGet]
     [SwaggerOperation(Summary = "Listar empresas del CRM")]
@@ -100,28 +117,30 @@ public class CompaniesController : ControllerBase
     [SwaggerResponse(404, "No encontrada")]
     public async Task<IActionResult> GetCompany(int id)
     {
+        var myAccounts = await MyAccountIdsAsync();
         var company = await _context.Companies
             .AsNoTracking()
             .Where(c => c.CompanyId == id)
             .Select(c => new
             {
-                c.CompanyId, c.Name, c.Website, c.Address,
+                c.AccountId, c.CompanyId, c.Name, c.Website, c.Address,
                 c.City, c.State, c.PostalCode, c.PhoneNumber,
                 c.LifecycleStatus, c.CreatedOn, c.ModifiedOn,
             })
             .FirstOrDefaultAsync();
 
-        if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+        if (company == null || (myAccounts != null && !await CompanyVisibleAsync(id, company.AccountId, myAccounts)))
+            return NotFound(new { message = "Empresa no encontrada." });
 
         var contacts = await _context.Contacts
             .AsNoTracking()
-            .Where(c => c.CompanyId == id)
+            .Where(c => c.CompanyId == id && (myAccounts == null || (c.AccountId != null && myAccounts.Contains(c.AccountId.Value))))
             .Select(c => new { c.ContactId, c.FirstName, c.LastName, c.Email, c.PhoneNumber, c.Position })
             .ToListAsync();
 
         var deals = await _context.Deals
             .AsNoTracking()
-            .Where(d => d.CompanyId == id)
+            .Where(d => d.CompanyId == id && (myAccounts == null || myAccounts.Contains(d.AccountId)))
             .Select(d => new { d.DealId, d.DealName, d.Status, d.QuotedAmount,
                 stageName = d.Stage != null ? d.Stage.Name : null })
             .ToListAsync();
@@ -170,6 +189,10 @@ public class CompaniesController : ControllerBase
     {
         var company = await _context.Companies.FindAsync(id);
         if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+
+        var myAccounts = await MyAccountIdsAsync();
+        if (myAccounts != null && !await CompanyVisibleAsync(id, company.AccountId, myAccounts))
+            return NotFound(new { message = "Empresa no encontrada." });
 
         if (!string.IsNullOrWhiteSpace(model.Name)) company.Name = model.Name;
         company.Website         = model.Website         ?? company.Website;

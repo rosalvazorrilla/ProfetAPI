@@ -171,11 +171,12 @@ namespace ProfetAPI.Data
             foreach (var lead in candidates)
             {
                 var name = lead.Company!.Trim();
-                var company = await Companies.FirstOrDefaultAsync(c => c.Name == name, ct);
+                var company = await Companies.FirstOrDefaultAsync(c => c.Name == name && c.AccountId == lead.AccountId, ct);
                 if (company == null)
                 {
                     company = new Company
                     {
+                        AccountId = lead.AccountId,
                         Name = name,
                         LifecycleStatus = "Prospecto",
                         CreatedOn = DateTime.UtcNow,

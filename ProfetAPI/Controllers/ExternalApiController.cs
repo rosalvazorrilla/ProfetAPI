@@ -433,6 +433,7 @@ public class ExternalApiController : ControllerBase
             Position        = model.Position,
             PostalCode      = model.PostalCode,
             CompanyId       = model.CompanyId,
+            AccountId       = key.AccountId,
             LifecycleStatus = model.LifecycleStatus ?? "Lead",
             CreatedOn       = DateTime.UtcNow,
             ModifiedOn      = DateTime.UtcNow,

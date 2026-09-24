@@ -8,6 +8,9 @@ public class Contact
     [Key]
     public int ContactId { get; set; }
     public int? CompanyId { get; set; }
+
+    /// <summary>Cuenta dueña del contacto (aislamiento por cliente). Null en filas viejas.</summary>
+    public int? AccountId { get; set; }
     public string? FirstName { get; set; }
     public string? LastName { get; set; }
 

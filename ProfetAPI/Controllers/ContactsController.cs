@@ -66,7 +66,10 @@ public class ContactsController : ControllerBase
             .Distinct()
             .ToListAsync();
 
-        var allContactIds = leadContactIds.Union(dealContactIds).Distinct().ToList();
+        var ownContactIds = await _context.Contacts.AsNoTracking()
+            .Where(c => c.AccountId == resolvedAccountId).Select(c => c.ContactId).ToListAsync();
+
+        var allContactIds = leadContactIds.Union(dealContactIds).Union(ownContactIds).Distinct().ToList();
 
         var query = _context.Contacts
             .AsNoTracking()
@@ -128,6 +131,16 @@ public class ContactsController : ControllerBase
 
         if (contact == null) return NotFound(new { message = "Contacto no encontrado." });
 
+        if (!(User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value == "AdminGlobal"))
+        {
+            var uid = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            var mine = await _context.AccountInternalUsers.Where(a => a.UserId == uid).Select(a => a.AccountId).ToListAsync();
+            var ok = await _context.Contacts.AnyAsync(c => c.ContactId == id && c.AccountId != null && mine.Contains(c.AccountId.Value))
+                  || await _context.Leads.AnyAsync(l => l.ContactId == id && l.AccountId != null && mine.Contains(l.AccountId.Value))
+                  || await _context.Deals.AnyAsync(d => d.PrimaryContactId == id && mine.Contains(d.AccountId));
+            if (!ok) return NotFound(new { message = "Contacto no encontrado." });
+        }
+
         // Related leads
         var leads = await _context.Leads
             .AsNoTracking()
@@ -168,6 +181,7 @@ public class ContactsController : ControllerBase
             Position        = model.Position,
             PostalCode      = model.PostalCode,
             CompanyId       = model.CompanyId,
+            AccountId       = model.AccountId ?? (model.CompanyId == null ? null : await _context.Companies.Where(x => x.CompanyId == model.CompanyId).Select(x => x.AccountId).FirstOrDefaultAsync()),
             LifecycleStatus = model.LifecycleStatus ?? "Lead",
             CreatedOn       = DateTime.UtcNow,
             ModifiedOn      = DateTime.UtcNow,
@@ -212,5 +226,6 @@ public class ContactUpsertDto
     public string? Position        { get; set; }
     public string? PostalCode      { get; set; }
     public int? CompanyId          { get; set; }
+    public int? AccountId          { get; set; }
     public string? LifecycleStatus { get; set; }
 }

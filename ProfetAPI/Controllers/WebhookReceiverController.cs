@@ -341,6 +341,7 @@ public class WebhookReceiverController : ControllerBase
                         Email           = email.NullIfEmpty(),
                         PhoneNumber     = phone.NullIfEmpty(),
                         Position        = position.NullIfEmpty(),
+                        AccountId       = wh.AccountId,
                         LifecycleStatus = "Nuevo",
                         CreatedOn       = DateTime.UtcNow,
                     });
@@ -463,6 +464,7 @@ public class WebhookReceiverController : ControllerBase
                     LastName        = nameParts.Length > 1 ? nameParts[1] : null,
                     Email           = email.NullIfEmpty(),
                     PhoneNumber     = phone.NullIfEmpty(),
+                    AccountId       = wh.AccountId,
                     LifecycleStatus = "Nuevo",
                     CreatedOn       = DateTime.UtcNow,
                 });

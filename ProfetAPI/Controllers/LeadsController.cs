@@ -1486,25 +1486,34 @@ public class LeadsController : ControllerBase
         try
         {
             // ── 1. Company ───────────────────────────────────────────────────────
-            int? companyId = lead.ContactId.HasValue
+            // Primero la Compañía que el lead ya trae ligada (autoenlace desde el campo Empresa);
+            // si no, la del contacto; si no, se busca/crea DENTRO de la cuenta del lead.
+            int? companyId = lead.CompanyId ?? (lead.ContactId.HasValue
                 ? (await _context.Contacts.AsNoTracking()
                     .Where(c => c.ContactId == lead.ContactId.Value)
                     .Select(c => c.CompanyId)
                     .FirstOrDefaultAsync())
-                : null;
+                : null);
 
             var companyName = model.CompanyName ?? lead.Company;
             if (!string.IsNullOrWhiteSpace(companyName) && companyId == null)
             {
-                var company = new Company
+                var trimmedName = companyName.Trim();
+                var company = await _context.Companies
+                    .FirstOrDefaultAsync(c => c.Name == trimmedName && c.AccountId == accountId);
+                if (company == null)
                 {
-                    Name            = companyName,
+                company = new Company
+                {
+                    AccountId       = accountId,
+                    Name            = trimmedName,
                     LifecycleStatus = "Prospecto",
                     CreatedOn       = DateTime.UtcNow,
                     ModifiedOn      = DateTime.UtcNow,
                 };
                 _context.Companies.Add(company);
                 await _context.SaveChangesAsync();
+                }
                 companyId = company.CompanyId;
             }
 
@@ -1529,7 +1538,7 @@ public class LeadsController : ControllerBase
                 if (!string.IsNullOrWhiteSpace(email))
                 {
                     existingContact = await _context.Contacts
-                        .Where(c => c.Email == email)
+                        .Where(c => c.Email == email && c.AccountId == accountId)
                         .FirstOrDefaultAsync();
                 }
 
@@ -1547,6 +1556,7 @@ public class LeadsController : ControllerBase
                 {
                     var contact = new Contact
                     {
+                        AccountId       = accountId,
                         FirstName       = firstName ?? lead.Name,
                         LastName        = lastName,
                         Email           = email,

@@ -154,6 +154,16 @@
 --   o si algún Lead de la cuenta ya la liga (Leads.CompanyId). EJECUTADA
 --   (corrida por Claude vía sqlcmd, confirmada con sys.columns).
 
+-- 2026-09-24 — Aislamiento por cuenta de Compañías y Contactos + fix conversión
+--   Contacts.AccountId INT NULL + FK_Contacts_Accounts; backfill de
+--   Contacts/Companies.AccountId desde Leads/Deals. IX_Companies_Name (único
+--   global) → IX_Companies_Account_Name UNIQUE(AccountId, Name);
+--   IX_Contacts_Email (único global) → IX_Contacts_Account_Email
+--   UNIQUE(AccountId, Email) WHERE Email no vacío. Los índices globales hacían
+--   fallar ConvertToDeal (duplicaba la compañía/contacto ya ligados al lead) y
+--   mezclaban clientes con empresa del mismo nombre. Requiere sqlcmd -I.
+--   EJECUTADA (Claude vía sqlcmd).
+
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
 -- (nada pendiente por ahora)
 
