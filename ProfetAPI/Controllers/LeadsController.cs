@@ -1036,8 +1036,9 @@ public class LeadsController : ControllerBase
             .Select(a => a.CustomerId).FirstAsync();
         var whatsappNumber = await _context.Customers.Where(c => c.Id == customerId)
             .Select(c => c.WhatsappNumber).FirstOrDefaultAsync();
+        // Sin WhatsApp integrado no es un error: el frontend ofrece activarlo o abrir WhatsApp Web.
         if (string.IsNullOrEmpty(whatsappNumber))
-            return BadRequest(new { message = "Este cliente no tiene WhatsApp configurado." });
+            return Ok(new { available = false, phone = digits.Length == 10 ? "52" + digits : digits });
 
         var wa = await _context.ContactsWhatsapp
             .FirstOrDefaultAsync(c => c.CustomerId == customerId && c.PhoneNumber.EndsWith(tail));
@@ -1066,7 +1067,7 @@ public class LeadsController : ControllerBase
             wa.AccountId ??= lead.AccountId;
         }
         await _context.SaveChangesAsync();
-        return Ok(new { whatsappContactId = wa.Id, created });
+        return Ok(new { available = true, whatsappContactId = wa.Id, created });
     }
 
     // PATCH /api/leads/{id}/status  — actualizar estatus
