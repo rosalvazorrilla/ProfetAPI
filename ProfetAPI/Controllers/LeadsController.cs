@@ -339,6 +339,18 @@ public class LeadsController : ControllerBase
             tagsByLead.TryGetValue((int)l.LeadId, out var tags);
             lastMovementByLead.TryGetValue(l.LeadId, out var lastMovementOn);
             sequenceStatsByLead.TryGetValue(l.LeadId, out var seqStats);
+
+            // Icono de alerta en la lista: mismo criterio que el panel de Best practices
+            // del dashboard — solo en estatus pendientes, y solo si de verdad hace falta
+            // ayudarle (sin responsable, o sin ningún movimiento reciente).
+            var effectiveLastActivity = lastMovementOn == default ? l.CreatedOn : lastMovementOn;
+            var ageDays = (DateTime.UtcNow - effectiveLastActivity).TotalDays;
+            var isPendingStatus = l.Status is "Nuevo" or "Contactado" or "Calificado";
+            var staleThresholdDays = l.Status == "Nuevo" ? 1.0 : 3.0;
+            string? attentionReason = !isPendingStatus ? null
+                : l.OwnerUserId == null ? "unassigned"
+                : ageDays > staleThresholdDays ? "noMovement"
+                : null;
             return new
             {
                 leadId         = l.LeadId,
@@ -361,6 +373,7 @@ public class LeadsController : ControllerBase
                 hasSequence          = seqStats != null,
                 sequenceTasksTotal     = seqStats?.Total ?? 0,
                 sequenceTasksCompleted = seqStats?.Completed ?? 0,
+                attentionReason,
             };
         });
 
