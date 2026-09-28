@@ -1230,7 +1230,11 @@ public class LeadsController : ControllerBase
             .ToListAsync();
 
         var answersByQuestion = currentAnswers.ToDictionary(a => a.QuestionId);
-        var totalPoints = currentAnswers.Sum(a => a.PointsAwarded);
+        // Mismo cálculo que al guardar (RecomputeAndPersistAsync): respuestas + reglas
+        // automáticas. Antes esto solo sumaba respuestas, así que el total que se veía
+        // en pantalla antes de guardar no coincidía con el que quedaba al guardar.
+        var rulePoints = await _scoring.EvaluateAutomaticRulesAsync(id, model.ScoringModelId);
+        var totalPoints = currentAnswers.Sum(a => a.PointsAwarded) + rulePoints;
 
         // Max possible score
         var maxPoints = questions.Sum(q =>
