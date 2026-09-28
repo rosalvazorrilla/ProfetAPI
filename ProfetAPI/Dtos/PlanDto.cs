@@ -13,6 +13,7 @@ namespace ProfetAPI.Dtos
     );
 
     public record PlanFeatureDto(
+        int FeatureId,
         string FeatureCode,
         string Name,
         string? Limit

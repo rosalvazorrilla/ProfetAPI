@@ -42,6 +42,7 @@ namespace ProfetAPI.Controllers
                 p.PlanPriceHistories.OrderByDescending(ph => ph.EffectiveDate).Select(ph => ph.MonthlyPrice).FirstOrDefault(),
                 p.PlanPriceHistories.OrderByDescending(ph => ph.EffectiveDate).Select(ph => ph.AnnualPrice).FirstOrDefault(),
                 p.PlanFeatures.Select(pf => new PlanFeatureDto(
+                    pf.FeatureId,
                     pf.Feature.FeatureCode,
                     pf.Feature.Name,
                     pf.Limit
