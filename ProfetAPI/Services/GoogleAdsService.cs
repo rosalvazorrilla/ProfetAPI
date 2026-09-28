@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using ProfetAPI.Data;
 
 namespace ProfetAPI.Services;
@@ -16,7 +17,8 @@ public class GoogleAdsService(
     IHttpClientFactory httpFactory,
     IConfiguration config,
     SecretProtector secrets,
-    ILogger<GoogleAdsService> logger)
+    ILogger<GoogleAdsService> logger,
+    IMemoryCache cache)
 {
     public record CampaignDayInsight(
         string   CampaignName,
@@ -34,6 +36,14 @@ public class GoogleAdsService(
     public async Task<(List<CampaignDayInsight> Data, string? Error)> GetCampaignDailyInsightsAsync(
         int accountId, DateTime from, DateTime to)
     {
+        // Cachear ~10 min — la usa el motor de métricas (Profet Analytics) y se estaba
+        // llamando a la API en vivo cada vez que alguien abría una gráfica (deuda técnica).
+        // Solo se cachea cuando trae datos sin error; un error nunca se cachea, para que
+        // el siguiente intento (p. ej. después de reconectar) vuelva a pegarle a la API.
+        var cacheKey = $"googleads-insights:{accountId}:{from:yyyyMMdd}:{to:yyyyMMdd}";
+        if (cache.TryGetValue(cacheKey, out (List<CampaignDayInsight> Data, string? Error) cached))
+            return cached;
+
         var account = await db.Accounts.AsNoTracking()
             .Where(a => a.AccountId == accountId)
             .Select(a => new { a.GoogleAdsCustomerId, a.GoogleAdsRefreshTokenEncrypted })
@@ -108,7 +118,9 @@ public class GoogleAdsService(
                     result.Add(new CampaignDayInsight(campaignName, date, clicks, impressions, costMicros / 1_000_000m, conversions));
                 }
             }
-            return (result, null);
+            var success = (result, (string?)null);
+            cache.Set(cacheKey, success, TimeSpan.FromMinutes(10));
+            return success;
         }
         catch (Exception ex)
         {

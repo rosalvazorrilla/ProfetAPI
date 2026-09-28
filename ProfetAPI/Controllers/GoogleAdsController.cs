@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using ProfetAPI.Data;
 using ProfetAPI.Services;
 using Swashbuckle.AspNetCore.Annotations;
@@ -26,12 +27,15 @@ public class GoogleAdsController : ControllerBase
     private readonly SecretProtector _secrets;
     private readonly GoogleAdsOAuthPendingStore _pending;
     private readonly ILogger<GoogleAdsController> _log;
+    private readonly IMemoryCache _cache;
 
     public GoogleAdsController(
         ApplicationDbContext db, IHttpClientFactory http, IConfiguration config,
-        SecretProtector secrets, GoogleAdsOAuthPendingStore pending, ILogger<GoogleAdsController> log)
+        SecretProtector secrets, GoogleAdsOAuthPendingStore pending, ILogger<GoogleAdsController> log,
+        IMemoryCache cache)
     {
         _db = db; _http = http; _config = config; _secrets = secrets; _pending = pending; _log = log;
+        _cache = cache;
     }
 
     private string? UserId  => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -229,6 +233,13 @@ public class GoogleAdsController : ControllerBase
         var resolved = await ResolveAccountId(accountId);
         if (resolved == null) return NotFound(new { message = "Sin cuenta asignada." });
 
+        // Cachear el resultado exitoso ~10 min — la API de Google Ads es lenta y se
+        // consultaba en vivo en cada carga del dashboard/métricas (deuda técnica).
+        // Solo se cachea la respuesta completa (con datos); los casos "no conectado"/
+        // "token expirado" nunca se cachean, para que reintenten en la próxima carga.
+        var cacheKey = $"googleads-kpis:{resolved}:{days}";
+        if (_cache.TryGetValue(cacheKey, out object? cachedKpis)) return Ok(cachedKpis);
+
         var account = await _db.Accounts.AsNoTracking()
             .Where(a => a.AccountId == resolved)
             .Select(a => new { a.GoogleAdsCustomerId, a.GoogleAdsAccountName, a.GoogleAdsRefreshTokenEncrypted })
@@ -289,7 +300,7 @@ public class GoogleAdsController : ControllerBase
                 }
 
         var cost = costMicros / 1_000_000.0;
-        return Ok(new
+        var kpis = new
         {
             connected = true,
             accountName = account.GoogleAdsAccountName,
@@ -301,7 +312,9 @@ public class GoogleAdsController : ControllerBase
             ctr = impressions > 0 ? Math.Round(clicks * 100.0 / impressions, 2) : 0,
             avgCpc = clicks > 0 ? Math.Round(cost / clicks, 2) : 0,
             costPerConversion = conversions > 0 ? Math.Round(cost / conversions, 2) : (double?)null,
-        });
+        };
+        _cache.Set(cacheKey, (object)kpis, TimeSpan.FromMinutes(10));
+        return Ok(kpis);
     }
 }
 

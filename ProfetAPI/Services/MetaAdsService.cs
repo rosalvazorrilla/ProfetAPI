@@ -1,8 +1,9 @@
 using System.Text.Json;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace ProfetAPI.Services;
 
-public class MetaAdsService(IHttpClientFactory httpFactory)
+public class MetaAdsService(IHttpClientFactory httpFactory, IMemoryCache cache)
 {
     private const string GraphBase = "https://graph.facebook.com/v21.0";
 
@@ -28,6 +29,13 @@ public class MetaAdsService(IHttpClientFactory httpFactory)
         DateTime dateFrom,
         DateTime dateTo)
     {
+        // Cachear ~10 min — se llamaba al Graph API en vivo cada vez que alguien abría el
+        // dashboard o una gráfica de Meta (deuda técnica). Solo se cachea cuando trae datos
+        // sin error, para que un token vencido o un error transitorio se reintente siempre.
+        var cacheKey = $"metaads:{adAccountId}:{dateFrom:yyyyMMdd}:{dateTo:yyyyMMdd}";
+        if (cache.TryGetValue(cacheKey, out (List<CampaignInsight> Data, string? Error) cached))
+            return cached;
+
         try
         {
             var http   = httpFactory.CreateClient();
@@ -69,7 +77,9 @@ public class MetaAdsService(IHttpClientFactory httpFactory)
                     Ctr          : item.GetDbl("ctr")
                 ));
             }
-            return (result, null);
+            var success = (result, (string?)null);
+            cache.Set(cacheKey, success, TimeSpan.FromMinutes(10));
+            return success;
         }
         catch (Exception ex)
         {
