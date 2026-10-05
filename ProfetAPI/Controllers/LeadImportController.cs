@@ -75,6 +75,23 @@ public class LeadImportController : ControllerBase
     public IActionResult GetFields() =>
         Ok(LeadImportFields.All.Select(f => new { key = f, label = LeadImportFields.Labels[f] }));
 
+    // POST /api/leads/import/validate  — revisa fila por fila qué fallaría (no guarda nada)
+    [HttpPost("validate")]
+    [SwaggerOperation(Summary = "Validar filas antes de importar y listar los errores por fila")]
+    public async Task<IActionResult> Validate([FromQuery] int? accountId, [FromBody] ValidateImportRequestDto req)
+    {
+        var acId = await ResolveAccountId(accountId ?? req.AccountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (req.Rows.Count > 2000) return BadRequest(new { message = "Máximo 2000 filas por importación." });
+        return Ok(await _import.ValidateAsync(req, acId.Value));
+    }
+
+    // POST /api/leads/import/suggest-fixes  — IA propone la corrección de cada problema (el usuario decide)
+    [HttpPost("suggest-fixes")]
+    [SwaggerOperation(Summary = "Sugerir correcciones de filas con error (IA)")]
+    public async Task<IActionResult> SuggestFixes([FromBody] SuggestFixesRequestDto req) =>
+        Ok(await _import.SuggestFixesAsync(req));
+
     // POST /api/leads/import/commit  — crea los leads con el mapeo confirmado
     [HttpPost("commit")]
     [SwaggerOperation(Summary = "Ejecutar la importación (transaccional, con deduplicación)")]

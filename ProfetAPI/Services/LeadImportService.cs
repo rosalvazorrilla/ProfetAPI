@@ -13,6 +13,8 @@ public interface ILeadImportService
     Task<ParsedFileResult> ParseFileAsync(Stream stream, string fileName, CancellationToken ct = default);
     Task<SuggestMappingResultDto> SuggestMappingAsync(SuggestMappingRequestDto req, CancellationToken ct = default);
     Task<CommitImportResultDto> CommitAsync(CommitImportRequestDto req, int accountId, string? ownerUserId, CancellationToken ct = default);
+    Task<ValidateImportResultDto> ValidateAsync(ValidateImportRequestDto req, int accountId, CancellationToken ct = default);
+    Task<SuggestFixesResultDto> SuggestFixesAsync(SuggestFixesRequestDto req, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -157,6 +159,125 @@ No inventes campos fuera de la lista. Responde en español.
         {
             logger.LogWarning(ex, "No se pudo sugerir el mapeo de columnas");
             return new SuggestMappingResultDto();
+        }
+    }
+
+    // ── Revisión previa: dónde exactamente falla cada fila (no guarda nada) ────
+    private static readonly System.Text.RegularExpressions.Regex EmailRx =
+        new(@"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool IsValidEmail(string v) => EmailRx.IsMatch(v.Trim());
+
+    private static bool IsValidPhone(string v)
+    {
+        var digits = v.Count(char.IsDigit);
+        return digits >= 8 && digits <= 15;
+    }
+
+    public async Task<ValidateImportResultDto> ValidateAsync(ValidateImportRequestDto req, int accountId, CancellationToken ct = default)
+    {
+        var result = new ValidateImportResultDto { TotalRows = req.Rows.Count };
+
+        var existingEmails = req.DuplicateStrategy == "skip"
+            ? (await db.Leads.Where(l => l.AccountId == accountId && l.Deleted != true && l.Email != null)
+                .Select(l => l.Email!).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        string? Get(Dictionary<string, string> row, string field)
+        {
+            if (!req.Mapping.TryGetValue(field, out var col) || string.IsNullOrEmpty(col)) return null;
+            return row.TryGetValue(col, out var v) && !string.IsNullOrWhiteSpace(v) ? v.Trim() : null;
+        }
+
+        for (int i = 0; i < req.Rows.Count; i++)
+        {
+            var row = req.Rows[i];
+            var rowNumber = i + 2; // la fila 1 del archivo es el encabezado
+            var name  = Get(row, "name");
+            var email = Get(row, "email");
+            var phone = Get(row, "phone");
+            if (!req.Mapping.Keys.Any(f => Get(row, f) != null)) { result.EmptyRows++; continue; }
+
+            var before = result.Issues.Count;
+
+            if (name == null && email == null)
+                result.Issues.Add(new ImportIssueDto { RowIndex = i, RowNumber = rowNumber, Field = "name", Code = "missing_identity",
+                    Message = "La fila no tiene nombre ni correo, no se puede crear el prospecto.", Value = "" });
+
+            if (email != null && !IsValidEmail(email))
+                result.Issues.Add(new ImportIssueDto { RowIndex = i, RowNumber = rowNumber, Field = "email", Code = "invalid_email",
+                    Message = "El correo no tiene un formato válido.", Value = email });
+
+            if (phone != null && !IsValidPhone(phone))
+                result.Issues.Add(new ImportIssueDto { RowIndex = i, RowNumber = rowNumber, Field = "phone", Code = "invalid_phone",
+                    Message = "El teléfono debe tener entre 8 y 15 dígitos.", Value = phone });
+
+            if (result.Issues.Count > before) { result.RowsWithIssues++; continue; }
+
+            if (email != null && existingEmails.Contains(email)) { result.Duplicates++; continue; }
+            if (email != null) existingEmails.Add(email);
+            result.ValidRows++;
+        }
+        return result;
+    }
+
+    // ── Sugerencias de corrección por IA: solo propone, el usuario acepta cada una ──
+    public async Task<SuggestFixesResultDto> SuggestFixesAsync(SuggestFixesRequestDto req, CancellationToken ct = default)
+    {
+        var items = req.Issues.Where(i => LeadImportFields.All.Contains(i.Field)).Take(60).ToList();
+        if (!ai.IsConfigured || items.Count == 0) return new SuggestFixesResultDto();
+
+        const string system = """
+Recibes problemas de datos de un archivo de prospectos a importar. Para cada uno, propone el valor corregido
+SOLO si la corrección es evidente a partir de lo que ya está escrito (por ejemplo un error de dedo en el dominio
+del correo como "gmial.com" → "gmail.com", espacios o símbolos de más, un teléfono con letras o separadores,
+o un nombre que se puede leer claramente del correo cuando este tiene forma nombre.apellido@).
+Reglas: NUNCA inventes datos que no estén en la fila; si no se puede corregir con seguridad, devuelve
+suggestedValue = null y explica por qué en "reason". Español, razón de una frase corta.
+Devuelve un elemento por cada problema recibido, con el mismo rowIndex y field.
+""";
+        const string schema = """
+{"type":"object","additionalProperties":false,"required":["suggestions"],"properties":{"suggestions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["rowIndex","field","suggestedValue","reason"],"properties":{"rowIndex":{"type":"integer"},"field":{"type":"string"},"suggestedValue":{"type":["string","null"]},"reason":{"type":"string"}}}}}}
+""";
+        var sb = new StringBuilder();
+        sb.AppendLine("Problemas a corregir:");
+        foreach (var i in items)
+            sb.AppendLine(JsonSerializer.Serialize(new { i.RowIndex, i.Field, i.Code, Valor = i.Value, Fila = i.Context }));
+
+        try
+        {
+            var json = await ai.CompleteJsonAsync(system, sb.ToString(), schema, ct);
+            var parsed = JsonSerializer.Deserialize<SuggestFixesResultDto>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+
+            // Anti-alucinación: solo sobre problemas pedidos, y la sugerencia debe pasar la misma validación.
+            var asked = items.ToDictionary(i => (i.RowIndex, i.Field), i => i);
+            var clean = new List<FixSuggestionDto>();
+            foreach (var s in parsed.Suggestions)
+            {
+                if (!asked.TryGetValue((s.RowIndex, s.Field), out var original)) continue;
+                var v = s.SuggestedValue?.Trim();
+                if (string.IsNullOrEmpty(v) || v == original.Value.Trim()) v = null;
+                if (v != null)
+                {
+                    var ok = s.Field switch
+                    {
+                        "email" => IsValidEmail(v),
+                        "phone" => IsValidPhone(v),
+                        "name"  => v.Length <= 150,
+                        _       => v.Length <= 300,
+                    };
+                    if (!ok) v = null;
+                }
+                var reason = (s.Reason ?? "").Trim();
+                clean.Add(new FixSuggestionDto { RowIndex = s.RowIndex, Field = s.Field, SuggestedValue = v,
+                    Reason = reason.Length > 200 ? reason[..200] : reason });
+            }
+            return new SuggestFixesResultDto { Suggestions = clean };
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "No se pudieron sugerir correcciones de importación");
+            return new SuggestFixesResultDto();
         }
     }
 

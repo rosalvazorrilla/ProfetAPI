@@ -22,6 +22,10 @@ public interface ISequenceDispatchService
     /// <summary>Envío ad-hoc a un lead puntual (seguimiento comercial masivo) — no viene
     /// de un paso de secuencia, así que no toca ninguna Activity.</summary>
     Task<(bool success, string? error)> SendToLeadAsync(Lead lead, MessageTemplate template);
+
+    /// <summary>Envío 1 a 1 desde la ficha del prospecto con el texto ya revisado/editado por el vendedor.</summary>
+    Task<(bool success, string? error)> SendCustomToLeadAsync(
+        Lead lead, string channel, string? subject, string body, int? sourceTemplateId, string? sourceTemplateName);
 }
 
 /// <summary>Cuántas fallas seguidas del envío automático de una misma tarea se toleran
@@ -98,6 +102,21 @@ public class SequenceDispatchService(
     public async Task<(bool success, string? error)> SendToLeadAsync(Lead lead, MessageTemplate template) =>
         await SendAsync(lead.AccountId, template, BuildLeadFields(lead), lead.Email, lead.Phone, "Lead", lead.LeadId);
 
+    public async Task<(bool success, string? error)> SendCustomToLeadAsync(
+        Lead lead, string channel, string? subject, string body, int? sourceTemplateId, string? sourceTemplateName)
+    {
+        // Plantilla transitoria (no se guarda): el vendedor pudo editar el texto antes de enviar.
+        var adHoc = new MessageTemplate
+        {
+            TemplateId   = sourceTemplateId ?? 0,
+            Name         = sourceTemplateName ?? "Mensaje personalizado",
+            Channel      = channel,
+            Subject      = subject,
+            Body         = body,
+        };
+        return await SendAsync(lead.AccountId, adHoc, BuildLeadFields(lead), lead.Email, lead.Phone, "Lead", lead.LeadId);
+    }
+
     private static Dictionary<string, string> BuildLeadFields(Lead lead) => new()
     {
         ["nombre"]   = lead.Name ?? "",
@@ -135,7 +154,7 @@ public class SequenceDispatchService(
                 EntityType   = entityType,
                 EntityId     = entityId,
                 Channel      = template.Channel,
-                TemplateId   = template.TemplateId,
+                TemplateId   = template.TemplateId == 0 ? null : template.TemplateId,
                 TemplateName = template.Name,
                 Success      = result.success,
                 Error        = result.error,

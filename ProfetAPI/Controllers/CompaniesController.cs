@@ -145,7 +145,101 @@ public class CompaniesController : ControllerBase
                 stageName = d.Stage != null ? d.Stage.Name : null })
             .ToListAsync();
 
-        return Ok(new { company, contacts, deals });
+        var leads = await _context.Leads
+            .AsNoTracking()
+            .Where(l => l.CompanyId == id && (l.Deleted ?? false) == false
+                && (myAccounts == null || (l.AccountId != null && myAccounts.Contains(l.AccountId.Value))))
+            .OrderByDescending(l => l.CreatedOn).Take(50)
+            .Select(l => new { l.LeadId, l.Name, l.Status, l.Score, l.CreatedOn })
+            .ToListAsync();
+
+        return Ok(new { company, contacts, deals, leads });
+    }
+
+    /// <summary>Carga la empresa si el usuario puede verla y devuelve los ids de sus leads/deals visibles.</summary>
+    private async Task<(object? company, List<long> leadIds, List<long> dealIds, int? accountId)> Company360ScopeAsync(int id)
+    {
+        var myAccounts = await MyAccountIdsAsync();
+        var company = await _context.Companies.AsNoTracking().Where(c => c.CompanyId == id)
+            .Select(c => new { c.AccountId, c.CompanyId, c.Name, c.Website, c.City, c.State, c.LifecycleStatus })
+            .FirstOrDefaultAsync();
+        if (company == null || (myAccounts != null && !await CompanyVisibleAsync(id, company.AccountId, myAccounts)))
+            return (null, new(), new(), null);
+
+        var leadRows = await _context.Leads.AsNoTracking()
+            .Where(l => l.CompanyId == id && (l.Deleted ?? false) == false
+                && (myAccounts == null || (l.AccountId != null && myAccounts.Contains(l.AccountId.Value))))
+            .Select(l => new { l.LeadId, l.AccountId }).ToListAsync();
+        var dealIds = await _context.Deals.AsNoTracking()
+            .Where(d => d.CompanyId == id && (myAccounts == null || myAccounts.Contains(d.AccountId)))
+            .Select(d => (long)d.DealId).ToListAsync();
+        var accountId = company.AccountId ?? leadRows.Select(l => l.AccountId).FirstOrDefault(a => a != null);
+        return (company, leadRows.Select(l => l.LeadId).ToList(), dealIds, accountId);
+    }
+
+    // GET /api/companies/{id}/timeline — actividad combinada de todos sus prospectos y oportunidades
+    [HttpGet("{id:int}/timeline")]
+    [SwaggerOperation(Summary = "Línea de tiempo combinada de la empresa (Vista 360)")]
+    public async Task<IActionResult> GetTimeline(int id)
+    {
+        var (company, leadIds, dealIds, _) = await Company360ScopeAsync(id);
+        if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+
+        var events = await _context.TimelineEvents.AsNoTracking()
+            .Where(e => !e.Deleted
+                && ((e.EntityType == "Lead" && leadIds.Contains(e.EntityId))
+                 || (e.EntityType == "Deal" && dealIds.Contains(e.EntityId))))
+            .OrderByDescending(e => e.CreatedOn).Take(40)
+            .Select(e => new { e.TimelineEventId, e.EntityType, e.EntityId, e.Type, e.Title, e.Detail, e.CreatedOn })
+            .ToListAsync();
+        return Ok(events);
+    }
+
+    // POST /api/companies/{id}/summary — resumen de la cuenta redactado por IA (solo bajo demanda)
+    [HttpPost("{id:int}/summary")]
+    [SwaggerOperation(Summary = "Resumen IA de la empresa a partir de su historial")]
+    public async Task<IActionResult> Summarize(int id, [FromServices] ProfetAPI.Services.IAiClient ai, CancellationToken ct)
+    {
+        if (!ai.IsConfigured) return StatusCode(503, new { message = "La IA no está configurada." });
+        var (company, leadIds, dealIds, _) = await Company360ScopeAsync(id);
+        if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+
+        var leads = await _context.Leads.AsNoTracking().Where(l => leadIds.Contains(l.LeadId))
+            .OrderByDescending(l => l.CreatedOn).Take(10)
+            .Select(l => new { l.Name, l.Status, l.Score, l.CreatedOn }).ToListAsync(ct);
+        var deals = await _context.Deals.AsNoTracking().Where(d => dealIds.Contains(d.DealId))
+            .OrderByDescending(d => d.CreatedOn).Take(10)
+            .Select(d => new { d.DealName, d.Status, d.QuotedAmount, stage = d.Stage != null ? d.Stage.Name : null }).ToListAsync(ct);
+        var events = await _context.TimelineEvents.AsNoTracking()
+            .Where(e => !e.Deleted
+                && ((e.EntityType == "Lead" && leadIds.Contains(e.EntityId))
+                 || (e.EntityType == "Deal" && dealIds.Contains(e.EntityId))))
+            .OrderByDescending(e => e.CreatedOn).Take(25)
+            .Select(e => new { e.Type, e.Title, e.Detail, e.CreatedOn }).ToListAsync(ct);
+
+        if (leads.Count == 0 && deals.Count == 0 && events.Count == 0)
+            return Ok(new { summary = "Esta empresa todavía no tiene prospectos, oportunidades ni actividad registrada." });
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Empresa: " + System.Text.Json.JsonSerializer.Serialize(company));
+        sb.AppendLine("Prospectos: " + System.Text.Json.JsonSerializer.Serialize(leads));
+        sb.AppendLine("Oportunidades: " + System.Text.Json.JsonSerializer.Serialize(deals));
+        sb.AppendLine("Actividad reciente (más nueva primero): " + System.Text.Json.JsonSerializer.Serialize(events));
+
+        const string system = """
+Eres un asesor comercial. Con los datos de una empresa cliente/prospecto, escribe un resumen ejecutivo en español de
+máximo 5 líneas: en qué punto está la relación, qué oportunidades hay abiertas y cuál es el siguiente paso recomendado.
+Usa SOLO los datos dados; si algo no aparece, no lo inventes ni lo supongas. Sin encabezados ni viñetas largas.
+""";
+        try
+        {
+            var text = (await ai.CompleteTextAsync(system, sb.ToString(), ct)).Trim();
+            return Ok(new { summary = text });
+        }
+        catch (Exception)
+        {
+            return StatusCode(502, new { message = "No se pudo generar el resumen. Intenta de nuevo." });
+        }
     }
 
     // POST /api/companies
