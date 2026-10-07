@@ -62,7 +62,7 @@ public class PlanLimitsService(ApplicationDbContext db) : IPlanLimitsService
             .Where(s => s.CustomerId == customerId && (s.Status == "Active" || s.Status == "Trialing"))
             .Select(s => new { s.SubscriptionId, s.PlanId, PlanName = s.Plan.Name }).FirstOrDefaultAsync();
 
-        var accountsUsed = await db.Accounts.AsNoTracking().CountAsync(a => a.CustomerId == customerId && a.Status != "Eliminada");
+        var accountsUsed = await db.Accounts.AsNoTracking().CountAsync(a => a.CustomerId == customerId && a.Status != "Eliminado");
         var aiRuns = await AiRunsThisMonthAsync(customerId);
         if (sub == null) return new PlanUsage(null, null, new(), accountsUsed, aiRuns);
 

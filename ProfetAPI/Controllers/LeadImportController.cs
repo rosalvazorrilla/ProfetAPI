@@ -17,11 +17,15 @@ public class LeadImportController : ControllerBase
 {
     private readonly ApplicationDbContext _db;
     private readonly ILeadImportService _import;
+    private readonly IDealImportService _dealImport;
+    private readonly IImportTemplateService _templates;
 
-    public LeadImportController(ApplicationDbContext db, ILeadImportService import)
+    public LeadImportController(ApplicationDbContext db, ILeadImportService import, IDealImportService dealImport, IImportTemplateService templates)
     {
         _db = db;
         _import = import;
+        _dealImport = dealImport;
+        _templates = templates;
     }
 
     private string? UserId  => User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -71,9 +75,43 @@ public class LeadImportController : ControllerBase
 
     // GET /api/leads/import/fields  — catálogo de campos disponibles para mapear
     [HttpGet("fields")]
-    [SwaggerOperation(Summary = "Campos del prospecto disponibles para mapear")]
-    public IActionResult GetFields() =>
-        Ok(LeadImportFields.All.Select(f => new { key = f, label = LeadImportFields.Labels[f] }));
+    [SwaggerOperation(Summary = "Campos disponibles para mapear (prospectos u oportunidades)")]
+    public IActionResult GetFields([FromQuery] string? entity = null) =>
+        Ok(DealImportFields.For(entity).Select(f => new { key = f, label = DealImportFields.LabelsFor(entity)[f] }));
+
+    // GET /api/leads/import/template?entity=leads|deals&accountId=&format=xlsx|csv  — archivo de ejemplo con instrucciones y catálogos
+    [HttpGet("template")]
+    [SwaggerOperation(Summary = "Descargar plantilla de ejemplo con instrucciones y catálogos")]
+    public async Task<IActionResult> Template([FromQuery] string entity = "leads", [FromQuery] int? accountId = null, [FromQuery] string format = "xlsx")
+    {
+        if (entity != "leads" && entity != "deals") return BadRequest(new { message = "entity debe ser leads o deals." });
+        var acId = await ResolveAccountId(accountId);
+        var (bytes, contentType, fileName) = await _templates.BuildAsync(entity, acId, format == "csv" ? "csv" : "xlsx");
+        return File(bytes, contentType, fileName);
+    }
+
+    // POST /api/leads/import/deals/validate  — revisión previa de oportunidades (no guarda nada)
+    [HttpPost("deals/validate")]
+    [SwaggerOperation(Summary = "Validar filas de oportunidades antes de importar")]
+    public async Task<IActionResult> ValidateDeals([FromQuery] int? accountId, [FromBody] ValidateImportRequestDto req)
+    {
+        var acId = await ResolveAccountId(accountId ?? req.AccountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (req.Rows.Count > 2000) return BadRequest(new { message = "Máximo 2000 filas por importación." });
+        return Ok(await _dealImport.ValidateAsync(req, acId.Value));
+    }
+
+    // POST /api/leads/import/deals/commit  — crea las oportunidades con el mapeo confirmado
+    [HttpPost("deals/commit")]
+    [SwaggerOperation(Summary = "Importar oportunidades (transaccional, con deduplicación)")]
+    public async Task<IActionResult> CommitDeals([FromQuery] int? accountId, [FromBody] CommitImportRequestDto req)
+    {
+        var acId = await ResolveAccountId(accountId ?? req.AccountId);
+        if (acId == null) return NotFound(new { message = "Sin cuenta asignada." });
+        if (req.Rows.Count == 0) return BadRequest(new { message = "No hay filas para importar." });
+        if (req.Rows.Count > 2000) return BadRequest(new { message = "Máximo 2000 filas por importación." });
+        return Ok(await _dealImport.CommitAsync(req, acId.Value, UserId));
+    }
 
     // POST /api/leads/import/validate  — revisa fila por fila qué fallaría (no guarda nada)
     [HttpPost("validate")]

@@ -134,7 +134,7 @@ public class AdminAccountsController : ControllerBase
             return NotFound(new { message = "Cliente no encontrado." });
 
         var accounts = await _context.Accounts
-            .Where(a => a.CustomerId == customerId && a.Status != "Eliminada")
+            .Where(a => a.CustomerId == customerId && a.Status != "Eliminado")
             .Select(a => new AdminAccountResponseDto
             {
                 AccountId = a.AccountId,
@@ -164,7 +164,7 @@ public class AdminAccountsController : ControllerBase
         var accLimit = await _planLimits.GetLimitAsync(customerId, ProfetAPI.Services.PlanLimitsService.AccountsFeature);
         if (!force && accLimit?.Limit is int maxAccounts)
         {
-            var existing = await _context.Accounts.CountAsync(a => a.CustomerId == customerId && a.Status != "Eliminada");
+            var existing = await _context.Accounts.CountAsync(a => a.CustomerId == customerId && a.Status != "Eliminado");
             if (existing >= maxAccounts)
                 return Conflict(new
                 {
@@ -210,8 +210,8 @@ public class AdminAccountsController : ControllerBase
 
     // DELETE /api/admin/customers/{customerId}/accounts/{accountId}
     [HttpDelete("{accountId}")]
-    [SwaggerOperation(Summary = "Eliminar cuenta (borrado lógico: queda como 'Eliminada')", Description = "No se permite si la cuenta aún tiene prospectos u oportunidades vigentes. No es un borrado físico: la fila se conserva para auditoría.")]
-    [SwaggerResponse(204, "Eliminada")]
+    [SwaggerOperation(Summary = "Eliminar cuenta (borrado lógico: queda como 'Eliminado')", Description = "No se permite si la cuenta aún tiene prospectos u oportunidades vigentes. No es un borrado físico: la fila se conserva para auditoría.")]
+    [SwaggerResponse(204, "Eliminado")]
     [SwaggerResponse(400, "No se puede eliminar una cuenta activa")]
     [SwaggerResponse(404, "Cuenta no encontrada")]
     public async Task<IActionResult> Delete(int customerId, int accountId)
@@ -224,7 +224,7 @@ public class AdminAccountsController : ControllerBase
             return BadRequest(new { message = "La cuenta aún tiene prospectos u oportunidades; muévelos o elimínalos antes de borrarla." });
 
         // Borrado lógico: el borrado físico revisa decenas de tablas relacionadas y deja huérfanos si algo apunta a la cuenta.
-        account.Status = "Eliminada";
+        account.Status = "Eliminado";
         await _context.SaveChangesAsync();
         return NoContent();
     }

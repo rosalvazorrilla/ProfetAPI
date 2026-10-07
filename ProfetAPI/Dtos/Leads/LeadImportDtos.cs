@@ -13,6 +13,24 @@ public static class LeadImportFields
     };
 }
 
+/// <summary>Campos de una Oportunidad a los que se puede mapear una columna del archivo.</summary>
+public static class DealImportFields
+{
+    public static readonly string[] All =
+        { "dealName", "amount", "company", "contactName", "contactEmail", "contactPhone", "stage", "status", "closeDate", "dealType", "prospectSource" };
+
+    public static readonly Dictionary<string, string> Labels = new()
+    {
+        ["dealName"] = "Nombre de la oportunidad", ["amount"] = "Monto cotizado", ["company"] = "Empresa",
+        ["contactName"] = "Contacto (nombre)", ["contactEmail"] = "Correo del contacto", ["contactPhone"] = "Teléfono del contacto",
+        ["stage"] = "Etapa", ["status"] = "Estatus", ["closeDate"] = "Fecha de cierre",
+        ["dealType"] = "Tipo de oportunidad", ["prospectSource"] = "Fuente",
+    };
+
+    public static string[] For(string? entity) => entity == "deals" ? All : LeadImportFields.All;
+    public static Dictionary<string, string> LabelsFor(string? entity) => entity == "deals" ? Labels : LeadImportFields.Labels;
+}
+
 public class ParsedFileResult
 {
     public List<string> Columns { get; set; } = new();
@@ -23,6 +41,8 @@ public class ParsedFileResult
 
 public class SuggestMappingRequestDto
 {
+    /// <summary>"leads" (default) | "deals".</summary>
+    public string? Entity { get; set; }
     public List<string> Columns { get; set; } = new();
     public List<Dictionary<string, string>> SampleRows { get; set; } = new();
 }
@@ -67,6 +87,8 @@ public class ImportIssueDto
     public string Code { get; set; } = "";
     public string Message { get; set; } = "";
     public string Value { get; set; } = "";
+    /// <summary>Valores permitidos (catálogo) cuando el campo solo acepta una lista, p. ej. las etapas.</summary>
+    public List<string>? Allowed { get; set; }
 }
 
 public class ValidateImportResultDto
@@ -90,8 +112,11 @@ public class FixRequestItemDto
     public string Field { get; set; } = "";
     public string Code { get; set; } = "";
     public string Value { get; set; } = "";
-    /// <summary>Resto de los datos de esa fila (campo del lead → valor), solo como contexto.</summary>
+    /// <summary>Resto de los datos de esa fila (campo → valor), solo como contexto.</summary>
     public Dictionary<string, string> Context { get; set; } = new();
+    /// <summary>Si viene, la corrección sugerida solo puede ser uno de estos valores.</summary>
+    public List<string>? AllowedValues { get; set; }
+    public string? Entity { get; set; }
 }
 
 public class FixSuggestionDto

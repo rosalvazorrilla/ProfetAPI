@@ -146,6 +146,8 @@ builder.Services.AddScoped<ProfetAPI.Services.INextActionService, ProfetAPI.Serv
 
 // Importación de leads (CSV/Excel + mapeo de columnas con IA)
 builder.Services.AddScoped<ProfetAPI.Services.ILeadImportService, ProfetAPI.Services.LeadImportService>();
+builder.Services.AddScoped<ProfetAPI.Services.IDealImportService, ProfetAPI.Services.DealImportService>();
+builder.Services.AddScoped<ProfetAPI.Services.IImportTemplateService, ProfetAPI.Services.ImportTemplateService>();
 
 // --- 5b. Servicios de Controladores, SignalR y Swagger ---
 builder.Services.AddSignalR();

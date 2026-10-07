@@ -95,7 +95,9 @@ public class LeadImportService(
     private static ParsedFileResult ParseExcel(Stream stream)
     {
         using var wb = new XLWorkbook(stream);
-        var ws = wb.Worksheets.First();
+        // La plantilla descargable trae hojas de Instrucciones y Catálogos: los datos van en "Plantilla".
+        var ws = wb.Worksheets.FirstOrDefault(w => string.Equals(w.Name, "Plantilla", StringComparison.OrdinalIgnoreCase))
+                 ?? wb.Worksheets.First();
         var usedRange = ws.RangeUsed();
         if (usedRange == null) return new ParsedFileResult();
 
@@ -116,7 +118,13 @@ public class LeadImportService(
         {
             var row = new Dictionary<string, string>();
             for (int i = 0; i < columns.Count; i++)
-                row[columns[i]] = r.Cell(i + 1).GetString().Trim();
+            {
+                var cell = r.Cell(i + 1);
+                // Una celda con tipo fecha se lee en ISO para no depender de la configuración regional (día/mes vs mes/día).
+                row[columns[i]] = cell.DataType == XLDataType.DateTime && cell.TryGetValue(out DateTime dt)
+                    ? dt.ToString("yyyy-MM-dd")
+                    : cell.GetString().Trim();
+            }
             result.Rows.Add(row);
         }
         return result;
@@ -127,9 +135,11 @@ public class LeadImportService(
     {
         if (!ai.IsConfigured || req.Columns.Count == 0) return new SuggestMappingResultDto();
 
-        var fieldsText = string.Join(", ", LeadImportFields.All.Select(f => $"{f} ({LeadImportFields.Labels[f]})"));
+        var entityFields = DealImportFields.For(req.Entity);
+        var entityLabels = DealImportFields.LabelsFor(req.Entity);
+        var fieldsText = string.Join(", ", entityFields.Select(f => $"{f} ({entityLabels[f]})"));
         var system = $"""
-Recibes las columnas de un archivo de prospectos y una muestra de filas. Para cada columna, decide a cuál de
+Recibes las columnas de un archivo de {(req.Entity == "deals" ? "oportunidades" : "prospectos")} y una muestra de filas. Para cada columna, decide a cuál de
 estos campos corresponde: {fieldsText}. Si una columna no corresponde a ninguno, usa "" (cadena vacía).
 No inventes campos fuera de la lista. Responde en español.
 """;
@@ -149,7 +159,7 @@ No inventes campos fuera de la lista. Responde en español.
             var parsed = JsonSerializer.Deserialize<SuggestMappingResultDto>(json, opts) ?? new();
 
             // Anti-alucinación: solo aceptar campos válidos, y solo columnas que realmente vienen del archivo
-            var valid = new HashSet<string>(LeadImportFields.All);
+            var valid = new HashSet<string>(entityFields);
             var cleaned = parsed.Mapping
                 .Where(kv => req.Columns.Contains(kv.Key) && (string.IsNullOrEmpty(kv.Value) || valid.Contains(kv.Value)))
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
@@ -224,7 +234,7 @@ No inventes campos fuera de la lista. Responde en español.
     // ── Sugerencias de corrección por IA: solo propone, el usuario acepta cada una ──
     public async Task<SuggestFixesResultDto> SuggestFixesAsync(SuggestFixesRequestDto req, CancellationToken ct = default)
     {
-        var items = req.Issues.Where(i => LeadImportFields.All.Contains(i.Field)).Take(60).ToList();
+        var items = req.Issues.Where(i => LeadImportFields.All.Contains(i.Field) || DealImportFields.All.Contains(i.Field)).Take(60).ToList();
         if (!ai.IsConfigured || items.Count == 0) return new SuggestFixesResultDto();
 
         const string system = """
@@ -234,6 +244,7 @@ del correo como "gmial.com" → "gmail.com", espacios o símbolos de más, un te
 o un nombre que se puede leer claramente del correo cuando este tiene forma nombre.apellido@).
 Reglas: NUNCA inventes datos que no estén en la fila; si no se puede corregir con seguridad, devuelve
 suggestedValue = null y explica por qué en "reason". Español, razón de una frase corta.
+Si un problema trae "AllowedValues", suggestedValue debe ser EXACTAMENTE uno de esos valores (el más parecido a lo escrito) o null.
 Devuelve un elemento por cada problema recibido, con el mismo rowIndex y field.
 """;
         const string schema = """
@@ -242,7 +253,7 @@ Devuelve un elemento por cada problema recibido, con el mismo rowIndex y field.
         var sb = new StringBuilder();
         sb.AppendLine("Problemas a corregir:");
         foreach (var i in items)
-            sb.AppendLine(JsonSerializer.Serialize(new { i.RowIndex, i.Field, i.Code, Valor = i.Value, Fila = i.Context }));
+            sb.AppendLine(JsonSerializer.Serialize(new { i.RowIndex, i.Field, i.Code, Valor = i.Value, Fila = i.Context, AllowedValues = i.AllowedValues }));
 
         try
         {
@@ -259,8 +270,20 @@ Devuelve un elemento por cada problema recibido, con el mismo rowIndex y field.
                 if (string.IsNullOrEmpty(v) || v == original.Value.Trim()) v = null;
                 if (v != null)
                 {
-                    var ok = s.Field switch
+                    var allowed = original.AllowedValues;
+                    if (allowed is { Count: > 0 })
                     {
+                        var hit = allowed.FirstOrDefault(a => string.Equals(a, v, StringComparison.OrdinalIgnoreCase));
+                        v = hit; // solo vale un valor del catálogo, escrito como en el catálogo
+                    }
+                    var ok = v == null ? false : s.Field switch
+                    {
+                        "amount" => decimal.TryParse(v, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _),
+                        "closeDate" => DateTime.TryParse(v, out _),
+                        "stage" or "status" or "dealType" => allowed is { Count: > 0 },
+                        "contactEmail" => IsValidEmail(v),
+                        "contactPhone" => IsValidPhone(v),
+                        "contactName" or "dealName" or "company" => v.Length <= 200,
                         "email" => IsValidEmail(v),
                         "phone" => IsValidPhone(v),
                         "name"  => v.Length <= 150,
