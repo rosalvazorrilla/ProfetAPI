@@ -218,21 +218,21 @@ public class ProfileController : ControllerBase
         if (file == null || file.Length == 0) return BadRequest(new { message = "No se recibió ningún archivo." });
         if (file.Length > 2 * 1024 * 1024) return BadRequest(new { message = "La foto no puede superar 2 MB." });
 
-        var ext = file.ContentType.ToLowerInvariant() switch
-        {
-            "image/png" => ".png",
-            "image/jpeg" or "image/jpg" => ".jpg",
-            "image/webp" => ".webp",
-            _ => null,
-        };
-        if (ext == null) return BadRequest(new { message = "Solo PNG, JPG o WebP." });
+        if (file.ContentType.ToLowerInvariant() is not ("image/png" or "image/jpeg" or "image/jpg" or "image/webp"))
+            return BadRequest(new { message = "Solo PNG, JPG o WebP." });
+
+        // Recorte cuadrado de 256 px en WebP: unos pocos KB en vez de megas.
+        using var photoStream = file.OpenReadStream();
+        var photo = ProfetAPI.Services.ImageOptimizer.Optimize(photoStream, file.ContentType, 256, 256, squareCrop: true, toWebp: true, quality: 82);
+        if (photo == null) return BadRequest(new { message = "El archivo no es una imagen válida." });
+        var ext = photo.Extension;
 
         // Carpeta persistente (sobrevive a los deploys), una foto por usuario.
         var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(env), "avatars");
         Directory.CreateDirectory(folder);
         foreach (var old in Directory.GetFiles(folder, CurrentUserId + ".*")) System.IO.File.Delete(old);
         var path = Path.Combine(folder, CurrentUserId + ext);
-        using (var stream = new FileStream(path, FileMode.Create)) await file.CopyToAsync(stream);
+        await System.IO.File.WriteAllBytesAsync(path, photo.Bytes);
 
         var baseUrl = config["Api:BaseUrl"]?.TrimEnd('/') ?? $"{Request.Scheme}://{Request.Host}";
         var url = $"{baseUrl}/uploads/avatars/{CurrentUserId}{ext}?v={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";

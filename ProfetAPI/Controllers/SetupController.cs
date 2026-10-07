@@ -2458,15 +2458,19 @@ namespace ProfetAPI.Controllers
                 return BadRequest(new { message = "El parámetro 'type' debe ser: logo, logo-large, logo-small o favicon." });
 
             // Construir ruta de destino
-            var extension = Path.GetExtension(file.FileName).ToLower();
+            // Se achica y recomprime antes de guardar: menos datos en el celular.
+            var (maxW, maxH) = type switch { "logo-small" => (256, 256), "favicon" => (128, 128), _ => (600, 200) };
+            using var inStream = file.OpenReadStream();
+            var optimized = ProfetAPI.Services.ImageOptimizer.Optimize(inStream, file.ContentType, maxW, maxH);
+            if (optimized == null) return BadRequest(new { message = "El archivo no es una imagen válida." });
+
+            var extension = optimized.Extension;
             var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(_webHostEnvironment), "branding", customer.Id.ToString());
             Directory.CreateDirectory(folder);
 
             var fileName = $"{type}_{customer.Id}{extension}";
             var filePath = Path.Combine(folder, fileName);
-
-            using (var stream = new FileStream(filePath, FileMode.Create))
-                await file.CopyToAsync(stream);
+            await System.IO.File.WriteAllBytesAsync(filePath, optimized.Bytes);
 
             // Construir URL pública — usar la base fija de config, NO Request.Host (ver comentario
             // en el constructor). Fallback a Request.Host solo si no hay Api:BaseUrl configurado

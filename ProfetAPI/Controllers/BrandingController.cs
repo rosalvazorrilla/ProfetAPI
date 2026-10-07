@@ -179,15 +179,19 @@ namespace ProfetAPI.Controllers
             if (!validTypes.Contains(type))
                 return BadRequest(new { message = "El parámetro 'type' debe ser: logo-large, logo-small, logo-login o favicon." });
 
-            var extension = Path.GetExtension(file.FileName).ToLower();
+            // Se achica y recomprime antes de guardar: menos datos en el celular.
+            var (maxW, maxH) = type switch { "logo-small" => (256, 256), "favicon" => (128, 128), _ => (600, 200) };
+            using var inStream = file.OpenReadStream();
+            var optimized = ProfetAPI.Services.ImageOptimizer.Optimize(inStream, file.ContentType, maxW, maxH);
+            if (optimized == null) return BadRequest(new { message = "El archivo no es una imagen válida." });
+
+            var extension = optimized.Extension;
             var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(_webHostEnvironment), "branding", "global");
             Directory.CreateDirectory(folder);
 
             var fileName = $"{type}{extension}";
             var filePath = Path.Combine(folder, fileName);
-
-            using (var stream = new FileStream(filePath, FileMode.Create))
-                await file.CopyToAsync(stream);
+            await System.IO.File.WriteAllBytesAsync(filePath, optimized.Bytes);
 
             var baseUrl = _apiBaseUrl ?? $"{Request.Scheme}://{Request.Host}";
             var publicUrl = $"{baseUrl}/uploads/branding/global/{fileName}?v={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
