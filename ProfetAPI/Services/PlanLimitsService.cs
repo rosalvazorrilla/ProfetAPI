@@ -33,13 +33,19 @@ public class PlanLimitsService(ApplicationDbContext db) : IPlanLimitsService
     {
         var sub = await db.Subscriptions.AsNoTracking()
             .Where(s => s.CustomerId == customerId && (s.Status == "Active" || s.Status == "Trialing"))
-            .Select(s => new { s.PlanId, PlanName = s.Plan.Name }).FirstOrDefaultAsync();
+            .Select(s => new { s.SubscriptionId, s.PlanId, PlanName = s.Plan.Name }).FirstOrDefaultAsync();
         if (sub == null) return null;
 
         var row = await db.PlanFeatures.AsNoTracking()
             .Where(pf => pf.PlanId == sub.PlanId && pf.Feature.FeatureCode == featureCode)
             .Select(pf => new { pf.Limit }).FirstOrDefaultAsync();
-        return row == null ? null : new PlanLimit(ParseLimit(row.Limit), sub.PlanName);
+        if (row == null) return null;
+
+        // Un límite negociado para este cliente tiene prioridad sobre el del plan.
+        var custom = await db.SubscriptionFeatureOverrides.AsNoTracking()
+            .Where(o => o.SubscriptionId == sub.SubscriptionId && o.Feature.FeatureCode == featureCode)
+            .Select(o => o.CustomLimit).FirstOrDefaultAsync();
+        return new PlanLimit(ParseLimit(custom ?? row.Limit), sub.PlanName);
     }
 
     public async Task<int> AiRunsThisMonthAsync(int customerId)
@@ -69,6 +75,8 @@ public class PlanLimitsService(ApplicationDbContext db) : IPlanLimitsService
             .Select(pf => new { pf.FeatureId, pf.Feature.FeatureCode, pf.Feature.Name }).Distinct().ToListAsync();
         var mine = await db.PlanFeatures.AsNoTracking().Where(pf => pf.PlanId == sub.PlanId)
             .Select(pf => new { pf.FeatureId, pf.Limit }).ToListAsync();
+        var overrides = await db.SubscriptionFeatureOverrides.AsNoTracking()
+            .Where(o => o.SubscriptionId == sub.SubscriptionId).Select(o => new { o.FeatureId, o.CustomLimit }).ToListAsync();
         var now = DateTime.UtcNow;
         var addOnFeatureIds = await db.CustomerPurchasedAddOns.AsNoTracking()
             .Where(p => p.SubscriptionId == sub.SubscriptionId && (p.ExpiryDate == null || p.ExpiryDate > now))
@@ -78,6 +86,8 @@ public class PlanLimitsService(ApplicationDbContext db) : IPlanLimitsService
         foreach (var f in matrix.OrderBy(f => f.FeatureId))
         {
             var m = mine.FirstOrDefault(x => x.FeatureId == f.FeatureId);
+            var ov = overrides.FirstOrDefault(x => x.FeatureId == f.FeatureId)?.CustomLimit;
+            if (m != null && ov != null) m = new { m.FeatureId, Limit = (string?)ov };
             var inPlan = m != null;
             var viaAddOn = !inPlan && addOnFeatureIds.Contains(f.FeatureId);
             int? limit = inPlan ? ParseLimit(m!.Limit) : null;

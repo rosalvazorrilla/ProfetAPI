@@ -117,6 +117,10 @@ public class WebhooksController : ControllerBase
         var resolved = await ResolveAccountId(accountId);
         if (resolved == null) return BadRequest("No se pudo determinar la cuenta.");
 
+        var whCustomerId = await _db.Accounts.Where(a => a.AccountId == resolved.Value).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        if (whCustomerId != 0 && !await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IFeatureGateService>().IsAllowedAsync(whCustomerId, "EXTERNAL_API"))
+            return StatusCode(403, new { message = "API externa / Webhooks no está incluido en tu plan.", featureCode = "EXTERNAL_API" });
+
         if (string.IsNullOrWhiteSpace(req.Name))      return BadRequest("Name es requerido.");
         if (string.IsNullOrWhiteSpace(req.Direction))  return BadRequest("Direction es requerido.");
 

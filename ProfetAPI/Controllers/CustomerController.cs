@@ -410,7 +410,49 @@ namespace ProfetAPI.Controllers
             customer.IsMigrated = model.Migrated;
             customer.MigratedOn = model.Migrated ? (customer.MigratedOn ?? DateTime.UtcNow) : null;
             await _context.SaveChangesAsync();
-            return Ok(new { id = customer.Id, isMigrated = customer.IsMigrated, migratedOn = customer.MigratedOn });
+
+            // Al migrar, lo que el cliente ya usaba y su plan nuevo no incluye se le regala como complemento
+            // gratuito (PricePaid = 0) para no quitarle nada de un día para otro.
+            var gifts = model.Migrated ? await GrantLegacyGiftsAsync(customer) : new List<string>();
+            return Ok(new { id = customer.Id, isMigrated = customer.IsMigrated, migratedOn = customer.MigratedOn, gifts });
+        }
+
+        private async Task<List<string>> GrantLegacyGiftsAsync(Customer customer)
+        {
+            var granted = new List<string>();
+            var sub = await _context.Subscriptions
+                .Where(x => x.CustomerId == customer.Id && (x.Status == "Active" || x.Status == "Trialing"))
+                .OrderByDescending(x => x.SubscriptionId).FirstOrDefaultAsync();
+            if (sub == null) return granted;
+
+            var inPlan = (await _context.PlanFeatures.Where(pf => pf.PlanId == sub.PlanId)
+                .Select(pf => pf.Feature.FeatureCode).ToListAsync()).ToHashSet();
+            var owned = (await _context.CustomerPurchasedAddOns.Where(p => p.SubscriptionId == sub.SubscriptionId)
+                .Select(p => p.AddOn.Feature.FeatureCode).ToListAsync()).ToHashSet();
+
+            var accountIds = await _context.Accounts.Where(a => a.CustomerId == customer.Id).Select(a => a.AccountId).ToListAsync();
+            var usesWebhooks = await _context.AccountWebhooks.AnyAsync(w => accountIds.Contains(w.AccountId));
+            var usesWhatsApp = customer.HasWhatsApp == true || !string.IsNullOrEmpty(customer.WhatsappNumber);
+
+            var candidates = new List<(string code, bool uses)>
+            {
+                ("EXTERNAL_API", usesWebhooks),
+                ("WHATSAPP_LEADS", usesWhatsApp),
+            };
+            foreach (var (code, uses) in candidates)
+            {
+                if (!uses || inPlan.Contains(code) || owned.Contains(code)) continue;
+                var addOn = await _context.AddOns.Include(a => a.Feature).FirstOrDefaultAsync(a => a.Feature.FeatureCode == code);
+                if (addOn == null) continue;
+                _context.CustomerPurchasedAddOns.Add(new CustomerPurchasedAddOn
+                {
+                    SubscriptionId = sub.SubscriptionId, AddOnId = addOn.AddOnId,
+                    PricePaid = 0m, Quantity = 1, PurchaseDate = DateTime.UtcNow, ExpiryDate = null,
+                });
+                granted.Add(addOn.Name);
+            }
+            if (granted.Count > 0) await _context.SaveChangesAsync();
+            return granted;
         }
 
         // ── GET api/customers/5/subscription ────────────────────────────────

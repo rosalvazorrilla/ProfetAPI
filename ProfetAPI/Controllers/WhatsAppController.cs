@@ -449,6 +449,8 @@ public class WhatsAppController : ControllerBase
     {
         var customer = await _db.Customers.FindAsync(customerId);
         if (customer == null) return NotFound(new { message = "Cliente no encontrado." });
+        if (!await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IFeatureGateService>().IsAllowedAsync(customerId, "WHATSAPP_LEADS"))
+            return StatusCode(403, new { message = "WhatsApp sync no está incluido en el plan de este cliente.", featureCode = "WHATSAPP_LEADS" });
 
         var numberChanged = customer.WhatsappNumber != dto.WhatsappNumber;
 

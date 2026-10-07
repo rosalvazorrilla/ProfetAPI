@@ -15,12 +15,15 @@ public interface IWhatsAppService
     Task<(bool success, string? error)> SendAsync(int customerId, string toPhone, string text);
 }
 
-public class WhatsAppService(ApplicationDbContext db, IHttpClientFactory httpFactory, IConfiguration config) : IWhatsAppService
+public class WhatsAppService(ApplicationDbContext db, IHttpClientFactory httpFactory, IConfiguration config, IFeatureGateService featureGate) : IWhatsAppService
 {
     private const string TwoChatSendUrl = "https://api.p.2chat.io/open/whatsapp/send-message";
 
     public async Task<(bool success, string? error)> SendAsync(int customerId, string toPhone, string text)
     {
+        if (!await featureGate.IsAllowedAsync(customerId, "WHATSAPP_LEADS"))
+            return (false, "WhatsApp sync no está incluido en el plan de este cliente.");
+
         var customer   = await db.Customers.FindAsync(customerId);
         var apiKey     = customer?.TwoChatApiKey ?? config["TwoChat:GlobalApiKey"] ?? "UAK6e31c29a-c640-4877-81d9-ad67113ec7b5";
         var fromNumber = customer?.WhatsappNumber;

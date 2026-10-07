@@ -216,10 +216,21 @@ public class WebhookReceiverController : ControllerBase
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<AccountWebhook?> FindWebhook(string key, string platform) =>
-        await _db.AccountWebhooks.FirstOrDefaultAsync(w =>
+    private async Task<AccountWebhook?> FindWebhook(string key, string platform)
+    {
+        var wh = await _db.AccountWebhooks.FirstOrDefaultAsync(w =>
             w.WebhookKey == key && w.Platform == platform &&
             w.Direction == "Incoming" && w.IsActive);
+        if (wh == null) return null;
+
+        var customerId = await _db.Accounts.Where(a => a.AccountId == wh.AccountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        if (customerId != 0 && !await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IFeatureGateService>().IsAllowedAsync(customerId, "EXTERNAL_API"))
+        {
+            _log.LogWarning("Webhook {Key} ignorado: el plan del cliente {CustomerId} no incluye API externa / Webhooks", key, customerId);
+            return null;
+        }
+        return wh;
+    }
 
     private async Task<string> ReadRawBody()
     {
