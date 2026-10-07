@@ -34,7 +34,7 @@ public class DueTasksJob(IServiceScopeFactory scopeFactory, ILogger<DueTasksJob>
     {
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var notify = scope.ServiceProvider.GetRequiredService<INotificationService>();
+        var alerts = scope.ServiceProvider.GetRequiredService<IAlertService>();
         db.Database.SetCommandTimeout(90);
 
         var now = DateTime.UtcNow;
@@ -66,7 +66,7 @@ public class DueTasksJob(IServiceScopeFactory scopeFactory, ILogger<DueTasksJob>
                     "Deal" when t.EntityId.HasValue => $"/oportunidades?id={t.EntityId}",
                     _ => "/canales/tareas",
                 };
-                await notify.NotifyAsync(recipient, message, url, entityType: t.EntityType, entityId: t.EntityId);
+                await alerts.SendAsync(recipient, AlertType.TaskDue, message, url, entityType: t.EntityType, entityId: t.EntityId);
                 sent++;
             }
 

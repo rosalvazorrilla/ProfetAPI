@@ -17,6 +17,7 @@ namespace ProfetAPI.Controllers;
 /// </summary>
 [Route("api/receive")]
 [ApiController]
+[Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("webhook-in")]
 [AllowAnonymous]
 [SwaggerTag("Webhooks — Receptor público de eventos entrantes")]
 public class WebhookReceiverController : ControllerBase

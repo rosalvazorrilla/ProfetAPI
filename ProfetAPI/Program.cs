@@ -8,6 +8,7 @@ using ProfetAPI.Data;
 using ProfetAPI.Hubs;
 using ProfetAPI.Models;
 using System.Reflection; // <--- AGREGA ESTO (Necesario para leer el XML)
+using System.Threading.RateLimiting;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -143,6 +144,54 @@ builder.Services.AddScoped<ProfetAPI.Services.ITimelineLogger, ProfetAPI.Service
 
 // Notificaciones in-app
 builder.Services.AddScoped<ProfetAPI.Services.INotificationService, ProfetAPI.Services.NotificationService>();
+builder.Services.AddScoped<ProfetAPI.Services.IAlertService, ProfetAPI.Services.AlertService>();
+
+// ── Límite de peticiones (Rate Limiting) en las rutas públicas ──────────────────
+// Protege contra fuerza bruta en el login y contra saturación de la API externa y de los webhooks de entrada.
+// Se agrupa por cliente: IP real (último valor de X-Forwarded-For que agrega Azure, que no se puede falsificar
+// desde fuera), por llave de API o por llave de webhook. Si se pasa del límite responde 429 con Retry-After.
+static string ClientIp(HttpContext http)
+{
+    var xff = http.Request.Headers["X-Forwarded-For"].ToString();
+    var last = xff.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+    if (!string.IsNullOrEmpty(last))
+    {
+        var colon = last.LastIndexOf(':');
+        return colon > 0 && last.Count(c => c == ':') == 1 ? last[..colon] : last; // quita el puerto de IPv4
+    }
+    return http.Connection.RemoteIpAddress?.ToString() ?? "desconocida";
+}
+
+builder.Services.AddRateLimiter(o =>
+{
+    o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    o.OnRejected = async (ctx, ct) =>
+    {
+        ctx.HttpContext.Response.Headers.RetryAfter = "60";
+        await ctx.HttpContext.Response.WriteAsJsonAsync(new { message = "Demasiadas peticiones. Espera un minuto e inténtalo de nuevo." }, ct);
+    };
+
+    // Inicio de sesión: 20 intentos por minuto por IP
+    o.AddPolicy("login", http => RateLimitPartition.GetFixedWindowLimiter("login:" + ClientIp(http),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+
+    // API externa: 120 peticiones por minuto por llave de API (o por IP si no manda llave)
+    o.AddPolicy("public-api", http =>
+    {
+        var key = http.Request.Headers["X-Api-Key"].ToString();
+        var partition = string.IsNullOrWhiteSpace(key) ? "ip:" + ClientIp(http) : "key:" + key.GetHashCode();
+        return RateLimitPartition.GetFixedWindowLimiter("api:" + partition,
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 });
+    });
+
+    // Webhooks de entrada (Meta, formularios…): 300 por minuto por webhook
+    o.AddPolicy("webhook-in", http =>
+    {
+        var key = http.Request.RouteValues.TryGetValue("key", out var k) ? k?.ToString() : null;
+        return RateLimitPartition.GetFixedWindowLimiter("wh:" + (key ?? ClientIp(http)),
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 });
+    });
+});
 
 // Próxima mejor acción (IA, con caché en memoria)
 builder.Services.AddMemoryCache();
@@ -279,6 +328,8 @@ app.UseStaticFiles();
 
 // CORS — usa la política definida arriba (SetIsOriginAllowed + AllowCredentials)
 app.UseCors();
+
+app.UseRateLimiter();
 
 // AUTH
 app.UseAuthentication();

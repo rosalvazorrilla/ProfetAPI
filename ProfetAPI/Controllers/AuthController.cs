@@ -30,6 +30,7 @@ namespace ProfetAPI.Controllers
         }
 
         [HttpPost("login")]
+        [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("login")]
         // --- 3. DOCUMENTACIÓN DEL MÉTODO ---
         [SwaggerOperation(
             Summary = "Iniciar Sesión",

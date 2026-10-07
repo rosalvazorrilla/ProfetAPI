@@ -501,6 +501,87 @@ public class DealsController : ControllerBase
         return Ok(new { deal.DealId, deal.SequencePaused });
     }
 
+
+    public record DealStatusDto(string Status, decimal? FinalAmount);
+
+    // PATCH /api/deals/{id}/status — marcar la oportunidad como Ganada, Perdida o reabrirla
+    [HttpPatch("{id:int}/status")]
+    [SwaggerOperation(Summary = "Cerrar una oportunidad (Ganado / Perdido) o reabrirla (Abierto)")]
+    public async Task<IActionResult> SetStatus(int id, [FromBody] DealStatusDto dto,
+        [FromServices] Microsoft.Extensions.DependencyInjection.IServiceScopeFactory scopes,
+        [FromServices] ProfetAPI.Services.IAlertService alerts)
+    {
+        if (dto.Status is not ("Abierto" or "Ganado" or "Perdido"))
+            return BadRequest(new { message = "El estatus debe ser Abierto, Ganado o Perdido." });
+
+        var deal = await _context.Deals.FindAsync(id);
+        if (deal == null) return NotFound(new { message = "Deal no encontrado." });
+        if (!IsAdminGlobal && !await _context.AccountInternalUsers.AnyAsync(a => a.AccountId == deal.AccountId && a.UserId == CurrentUserId))
+            return Forbid();
+
+        var previous = deal.Status;
+        if (previous == dto.Status) return Ok(new { deal.DealId, deal.Status, deal.CloseDate, deal.FinalAmount, unchanged = true });
+
+        deal.Status = dto.Status;
+        if (dto.Status == "Abierto") { deal.CloseDate = null; }
+        else
+        {
+            deal.CloseDate = DateTime.UtcNow;
+            if (dto.Status == "Ganado") deal.FinalAmount = dto.FinalAmount ?? deal.FinalAmount ?? deal.QuotedAmount;
+        }
+        await _context.SaveChangesAsync();
+
+        await _timeline.LogAsync(deal.AccountId, "Deal", deal.DealId, "deal_status",
+            dto.Status == "Ganado" ? "Oportunidad ganada" : dto.Status == "Perdido" ? "Oportunidad perdida" : "Oportunidad reabierta",
+            detail: $"Estatus: {previous} → {dto.Status}", userId: CurrentUserId);
+
+        if (dto.Status == "Ganado")
+            await NotifyManagersDealWonAsync(deal, alerts);
+
+        // Webhooks salientes configurados para este evento (en segundo plano, con reintentos)
+        if (dto.Status is "Ganado" or "Perdido")
+            ProfetAPI.Services.WebhookDispatchExtensions.DispatchInBackground(scopes, deal.AccountId, dto.Status == "Ganado" ? "DealWon" : "DealLost", new
+            {
+                dealId = deal.DealId, dealName = deal.DealName, status = deal.Status,
+                amount = deal.FinalAmount ?? deal.QuotedAmount, closeDate = deal.CloseDate, accountId = deal.AccountId,
+            });
+
+        return Ok(new { deal.DealId, deal.Status, deal.CloseDate, deal.FinalAmount });
+    }
+
+    /// <summary>Avisa de inmediato a quien gerencia: Admin/Manager del cliente y el líder del equipo del vendedor (no al que cerró).</summary>
+    private async Task NotifyManagersDealWonAsync(Models.Deal deal, ProfetAPI.Services.IAlertService alerts)
+    {
+        var customerId = await _context.Accounts.Where(a => a.AccountId == deal.AccountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        var managerRoles = new[] { "Admin", "ManagerAdmin", "Manager" };
+
+        var recipients = await (from u in _context.Users
+                                join ur in _context.UserRoles on u.Id equals ur.UserId
+                                join r in _context.Roles on ur.RoleId equals r.Id
+                                where u.CustomerId == customerId && managerRoles.Contains(r.Name!)
+                                select u.Id).Distinct().ToListAsync();
+
+        // Líder(es) del equipo del responsable del trato
+        var ownerId = await _context.DealUsers.Where(du => du.DealId == deal.DealId && du.RoleInDeal == "Owner").Select(du => du.UserId).FirstOrDefaultAsync();
+        var closerId = ownerId ?? CurrentUserId;
+        if (closerId != null)
+        {
+            var leaders = await (from ut in _context.UserTeams
+                                 join t in _context.Teams on ut.TeamId equals t.Id
+                                 where ut.UserId == closerId && t.LeaderId != null
+                                 select t.LeaderId!).Distinct().ToListAsync();
+            recipients.AddRange(leaders);
+        }
+
+        var closerName = closerId == null ? "Un vendedor" : await _context.Users.Where(u => u.Id == closerId)
+            .Select(u => u.UserProfile != null ? (u.UserProfile.FirstName + " " + u.UserProfile.LastName) : u.Email).FirstOrDefaultAsync() ?? "Un vendedor";
+        var amount = deal.FinalAmount ?? deal.QuotedAmount;
+        var message = $"¡Trato ganado! {closerName.Trim()} ganó \"{deal.DealName}\"" + (amount > 0 ? $" por ${amount:N0}" : "");
+
+        foreach (var uid in recipients.Distinct().Where(x => x != CurrentUserId && x != closerId))
+            await alerts.SendAsync(uid, ProfetAPI.Services.AlertType.DealWon, message, $"/oportunidades?id={deal.DealId}", "Deal", deal.DealId);
+    }
+
     // PATCH /api/deals/{id}/stage  — mover deal a otra etapa (drag & drop)
     [HttpPatch("{id}/stage")]
     [SwaggerOperation(Summary = "Mover deal a otra etapa")]

@@ -153,6 +153,31 @@ public class ProfileController : ControllerBase
         return row;
     }
 
+    public record NotificationSettingsDto(bool DealWonSystem, bool DealWonEmail, bool TaskDueSystem, bool TaskDueEmail);
+
+    // GET /api/profile/notification-settings — qué alertas recibo y por dónde
+    [HttpGet("notification-settings")]
+    [SwaggerOperation(Summary = "Alertas que quiere recibir el usuario (dentro del sistema y/o por correo)")]
+    public async Task<IActionResult> GetNotificationSettings()
+    {
+        var s = await _context.UserNotificationSettings.AsNoTracking().FirstOrDefaultAsync(x => x.UserId == CurrentUserId);
+        return Ok(new NotificationSettingsDto(s?.DealWonSystem ?? true, s?.DealWonEmail ?? false, s?.TaskDueSystem ?? true, s?.TaskDueEmail ?? false));
+    }
+
+    // PUT /api/profile/notification-settings
+    [HttpPut("notification-settings")]
+    [SwaggerOperation(Summary = "Guardar las alertas que quiere recibir el usuario")]
+    public async Task<IActionResult> SaveNotificationSettings([FromBody] NotificationSettingsDto dto)
+    {
+        var row = await _context.UserNotificationSettings.FirstOrDefaultAsync(x => x.UserId == CurrentUserId);
+        if (row == null) { row = new UserNotificationSetting { UserId = CurrentUserId }; _context.UserNotificationSettings.Add(row); }
+        row.DealWonSystem = dto.DealWonSystem; row.DealWonEmail = dto.DealWonEmail;
+        row.TaskDueSystem = dto.TaskDueSystem; row.TaskDueEmail = dto.TaskDueEmail;
+        row.UpdatedOn = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        return Ok(dto);
+    }
+
     // GET /api/profile/preferences
     [HttpGet("preferences")]
     [SwaggerOperation(Summary = "Preferencias del usuario: foto, zona horaria y tema")]
