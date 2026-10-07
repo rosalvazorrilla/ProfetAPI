@@ -2472,7 +2472,7 @@ namespace ProfetAPI.Controllers
             // en el constructor). Fallback a Request.Host solo si no hay Api:BaseUrl configurado
             // (p.ej. en local dev).
             var baseUrl = _apiBaseUrl ?? $"{Request.Scheme}://{Request.Host}";
-            var publicUrl = $"{baseUrl}/uploads/branding/{customer.Id}/{fileName}";
+            var publicUrl = $"{baseUrl}/uploads/branding/{customer.Id}/{fileName}?v={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
 
             return Ok(new { url = publicUrl, type });
         }

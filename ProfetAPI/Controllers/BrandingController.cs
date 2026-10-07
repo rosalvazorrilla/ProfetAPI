@@ -190,7 +190,7 @@ namespace ProfetAPI.Controllers
                 await file.CopyToAsync(stream);
 
             var baseUrl = _apiBaseUrl ?? $"{Request.Scheme}://{Request.Host}";
-            var publicUrl = $"{baseUrl}/uploads/branding/global/{fileName}";
+            var publicUrl = $"{baseUrl}/uploads/branding/global/{fileName}?v={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
 
             // Actualizar la fila automáticamente
             var row = await GetOrCreateGlobal();
