@@ -188,11 +188,79 @@ public class CompaniesController : ControllerBase
         var events = await _context.TimelineEvents.AsNoTracking()
             .Where(e => !e.Deleted
                 && ((e.EntityType == "Lead" && leadIds.Contains(e.EntityId))
-                 || (e.EntityType == "Deal" && dealIds.Contains(e.EntityId))))
+                 || (e.EntityType == "Deal" && dealIds.Contains(e.EntityId))
+                 || (e.EntityType == "Company" && e.EntityId == id)))
             .OrderByDescending(e => e.CreatedOn).Take(40)
             .Select(e => new { e.TimelineEventId, e.EntityType, e.EntityId, e.Type, e.Title, e.Detail, e.CreatedOn })
             .ToListAsync();
         return Ok(events);
+    }
+
+
+    public record CompanyNoteDto(string? Text);
+
+    // GET /api/companies/{id}/notes — notas escritas directamente sobre la empresa
+    [HttpGet("{id:int}/notes")]
+    [SwaggerOperation(Summary = "Notas de la empresa (Vista 360)")]
+    public async Task<IActionResult> GetNotes(int id)
+    {
+        var (company, _, _, _) = await Company360ScopeAsync(id);
+        if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+
+        var notes = await _context.TimelineEvents.AsNoTracking()
+            .Where(e => !e.Deleted && e.EntityType == "Company" && e.EntityId == id && e.Type == "note")
+            .OrderByDescending(e => e.CreatedOn).Take(100)
+            .Select(e => new { e.TimelineEventId, text = e.Detail, e.CreatedOn, e.CreatedByUserId })
+            .ToListAsync();
+
+        var authorIds = notes.Where(n => n.CreatedByUserId != null).Select(n => n.CreatedByUserId!).Distinct().ToList();
+        var names = await _context.Users.AsNoTracking().Where(u => authorIds.Contains(u.Id))
+            .Select(u => new { u.Id, Name = u.UserProfile != null ? (u.UserProfile.FirstName + " " + u.UserProfile.LastName) : u.Email })
+            .ToDictionaryAsync(u => u.Id, u => (u.Name ?? "").Trim());
+
+        return Ok(notes.Select(n => new
+        {
+            id = n.TimelineEventId, n.text, n.CreatedOn,
+            author = n.CreatedByUserId != null && names.TryGetValue(n.CreatedByUserId, out var nm) ? nm : null,
+            mine = n.CreatedByUserId == CurrentUserId,
+        }));
+    }
+
+    // POST /api/companies/{id}/notes
+    [HttpPost("{id:int}/notes")]
+    [SwaggerOperation(Summary = "Agregar una nota a la empresa")]
+    public async Task<IActionResult> AddNote(int id, [FromBody] CompanyNoteDto dto, [FromServices] ProfetAPI.Services.ITimelineLogger timeline)
+    {
+        var text = (dto.Text ?? "").Trim();
+        if (text.Length == 0) return BadRequest(new { message = "Escribe la nota." });
+        if (text.Length > 2000) text = text[..2000];
+
+        var (company, _, _, accountId) = await Company360ScopeAsync(id);
+        if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+
+        var acc = accountId ?? (await MyAccountIdsAsync())?.FirstOrDefault();
+        if (acc == null || acc == 0) return BadRequest(new { message = "La empresa no tiene una cuenta asociada." });
+
+        await timeline.LogAsync(acc.Value, "Company", id, "note", "Nota", detail: text, userId: CurrentUserId);
+        return Ok(new { added = true });
+    }
+
+    // DELETE /api/companies/{id}/notes/{noteId} — la borra su autor o un AdminGlobal
+    [HttpDelete("{id:int}/notes/{noteId:long}")]
+    [SwaggerOperation(Summary = "Eliminar una nota de la empresa")]
+    public async Task<IActionResult> DeleteNote(int id, long noteId)
+    {
+        var (company, _, _, _) = await Company360ScopeAsync(id);
+        if (company == null) return NotFound(new { message = "Empresa no encontrada." });
+
+        var note = await _context.TimelineEvents.FirstOrDefaultAsync(e => e.TimelineEventId == noteId
+            && e.EntityType == "Company" && e.EntityId == id && e.Type == "note" && !e.Deleted);
+        if (note == null) return NotFound(new { message = "Nota no encontrada." });
+        if (!IsAdminGlobal && note.CreatedByUserId != CurrentUserId) return Forbid();
+
+        note.Deleted = true;
+        await _context.SaveChangesAsync();
+        return NoContent();
     }
 
     // POST /api/companies/{id}/summary — resumen de la cuenta redactado por IA (solo bajo demanda)
@@ -213,7 +281,8 @@ public class CompaniesController : ControllerBase
         var events = await _context.TimelineEvents.AsNoTracking()
             .Where(e => !e.Deleted
                 && ((e.EntityType == "Lead" && leadIds.Contains(e.EntityId))
-                 || (e.EntityType == "Deal" && dealIds.Contains(e.EntityId))))
+                 || (e.EntityType == "Deal" && dealIds.Contains(e.EntityId))
+                 || (e.EntityType == "Company" && e.EntityId == id)))
             .OrderByDescending(e => e.CreatedOn).Take(25)
             .Select(e => new { e.Type, e.Title, e.Detail, e.CreatedOn }).ToListAsync(ct);
 

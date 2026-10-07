@@ -10,6 +10,7 @@ namespace ProfetAPI.Data
         // --- DBSETS PARA USUARIOS Y CRM BASE ---
         public DbSet<Customer> Customers { get; set; } = null!;
         public DbSet<UserProfile> UserProfiles { get; set; } = null!;
+        public DbSet<UserSetting> UserSettings { get; set; } = null!;
         public DbSet<UserEmailConfig> UserEmailConfigs { get; set; } = null!;
         public DbSet<Team> Teams { get; set; } = null!;
         public DbSet<UserTeam> UserTeams { get; set; } = null!;

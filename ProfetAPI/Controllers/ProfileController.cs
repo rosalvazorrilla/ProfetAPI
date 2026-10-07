@@ -107,6 +107,8 @@ public class ProfileController : ControllerBase
                 .FirstOrDefaultAsync();
         }
 
+        var settings = await _context.UserSettings.AsNoTracking().FirstOrDefaultAsync(x => x.UserId == CurrentUserId);
+
         var effectiveCustomerId = user.CustomerId ?? accountInfo?.customerId;
         var activeFeatureCodes = effectiveCustomerId.HasValue
             ? await GetActiveFeatureCodesAsync(effectiveCustomerId.Value)
@@ -130,7 +132,109 @@ public class ProfileController : ControllerBase
             phoneExt   = user.phoneExt,
             account    = accountInfo,
             customer   = customerInfo,
+            avatarUrl  = settings?.AvatarUrl,
+            theme      = settings?.Theme ?? "light",
+            timeZoneId = settings?.TimeZoneId,
         });
+    }
+
+    // ── Preferencias individuales: zona horaria, tema y foto ──────────────────
+
+    public record UpdatePreferencesDto(string? TimeZoneId, string? Theme);
+
+    private async Task<UserSetting> GetOrCreateSettings()
+    {
+        var row = await _context.UserSettings.FirstOrDefaultAsync(x => x.UserId == CurrentUserId);
+        if (row == null)
+        {
+            row = new UserSetting { UserId = CurrentUserId };
+            _context.UserSettings.Add(row);
+        }
+        return row;
+    }
+
+    // GET /api/profile/preferences
+    [HttpGet("preferences")]
+    [SwaggerOperation(Summary = "Preferencias del usuario: foto, zona horaria y tema")]
+    public async Task<IActionResult> GetPreferences()
+    {
+        var row = await _context.UserSettings.AsNoTracking().FirstOrDefaultAsync(x => x.UserId == CurrentUserId);
+        return Ok(new { avatarUrl = row?.AvatarUrl, theme = row?.Theme ?? "light", timeZoneId = row?.TimeZoneId });
+    }
+
+    // PUT /api/profile/preferences
+    [HttpPut("preferences")]
+    [SwaggerOperation(Summary = "Guardar zona horaria y tema")]
+    public async Task<IActionResult> SavePreferences([FromBody] UpdatePreferencesDto dto)
+    {
+        if (dto.Theme != null && dto.Theme is not ("light" or "dark" or "system"))
+            return BadRequest(new { message = "El tema debe ser light, dark o system." });
+        if (!string.IsNullOrWhiteSpace(dto.TimeZoneId))
+        {
+            try { TimeZoneInfo.FindSystemTimeZoneById(dto.TimeZoneId); }
+            catch { return BadRequest(new { message = "Zona horaria no válida." }); }
+        }
+
+        var row = await GetOrCreateSettings();
+        if (dto.Theme != null) row.Theme = dto.Theme;
+        if (dto.TimeZoneId != null) row.TimeZoneId = string.IsNullOrWhiteSpace(dto.TimeZoneId) ? null : dto.TimeZoneId.Trim();
+        row.UpdatedOn = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        return Ok(new { avatarUrl = row.AvatarUrl, theme = row.Theme, timeZoneId = row.TimeZoneId });
+    }
+
+    // POST /api/profile/avatar  (multipart, campo "file")
+    [HttpPost("avatar")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(3_000_000)]
+    [SwaggerOperation(Summary = "Subir la foto de perfil (PNG, JPG o WebP, máx. 2 MB)")]
+    public async Task<IActionResult> UploadAvatar(IFormFile file, [FromServices] IWebHostEnvironment env, [FromServices] IConfiguration config)
+    {
+        if (file == null || file.Length == 0) return BadRequest(new { message = "No se recibió ningún archivo." });
+        if (file.Length > 2 * 1024 * 1024) return BadRequest(new { message = "La foto no puede superar 2 MB." });
+
+        var ext = file.ContentType.ToLowerInvariant() switch
+        {
+            "image/png" => ".png",
+            "image/jpeg" or "image/jpg" => ".jpg",
+            "image/webp" => ".webp",
+            _ => null,
+        };
+        if (ext == null) return BadRequest(new { message = "Solo PNG, JPG o WebP." });
+
+        // Carpeta persistente (sobrevive a los deploys), una foto por usuario.
+        var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(env), "avatars");
+        Directory.CreateDirectory(folder);
+        foreach (var old in Directory.GetFiles(folder, CurrentUserId + ".*")) System.IO.File.Delete(old);
+        var path = Path.Combine(folder, CurrentUserId + ext);
+        using (var stream = new FileStream(path, FileMode.Create)) await file.CopyToAsync(stream);
+
+        var baseUrl = config["Api:BaseUrl"]?.TrimEnd('/') ?? $"{Request.Scheme}://{Request.Host}";
+        var url = $"{baseUrl}/uploads/avatars/{CurrentUserId}{ext}?v={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+
+        var row = await GetOrCreateSettings();
+        row.AvatarUrl = url;
+        row.UpdatedOn = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        return Ok(new { avatarUrl = url });
+    }
+
+    // DELETE /api/profile/avatar
+    [HttpDelete("avatar")]
+    [SwaggerOperation(Summary = "Quitar la foto de perfil")]
+    public async Task<IActionResult> RemoveAvatar([FromServices] IWebHostEnvironment env)
+    {
+        var row = await _context.UserSettings.FirstOrDefaultAsync(x => x.UserId == CurrentUserId);
+        if (row?.AvatarUrl != null)
+        {
+            var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(env), "avatars");
+            if (Directory.Exists(folder))
+                foreach (var old in Directory.GetFiles(folder, CurrentUserId + ".*")) System.IO.File.Delete(old);
+            row.AvatarUrl = null;
+            row.UpdatedOn = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+        }
+        return NoContent();
     }
 
     // PUT /api/profile  — actualizar perfil personal
