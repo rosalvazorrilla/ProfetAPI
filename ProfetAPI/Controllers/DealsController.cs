@@ -618,6 +618,64 @@ public class DealsController : ControllerBase
         return "";
     }
 
+
+    // GET /api/deals/export?accountId=&status=  — descarga las oportunidades de la cuenta en Excel
+    [HttpGet("export")]
+    [SwaggerOperation(Summary = "Exportar oportunidades a Excel")]
+    public async Task<IActionResult> ExportDeals([FromQuery] int? accountId, [FromQuery] string? status)
+    {
+        int acc;
+        if (accountId.HasValue)
+        {
+            if (!IsAdminGlobal && !await _context.AccountInternalUsers.AnyAsync(a => a.AccountId == accountId && a.UserId == CurrentUserId))
+                return Forbid();
+            acc = accountId.Value;
+        }
+        else
+        {
+            if (IsAdminGlobal) return BadRequest(new { message = "AdminGlobal debe especificar accountId." });
+            var mine = await _context.AccountInternalUsers.Where(a => a.UserId == CurrentUserId).Select(a => (int?)a.AccountId).FirstOrDefaultAsync();
+            if (mine == null) return NotFound(new { message = "Sin cuenta asignada." });
+            acc = mine.Value;
+        }
+
+        var q = _context.Deals.AsNoTracking().Where(d => d.AccountId == acc);
+        if (!string.IsNullOrWhiteSpace(status)) q = q.Where(d => d.Status == status);
+
+        var rows = await q.OrderByDescending(d => d.CreatedOn).Take(20000)
+            .Select(d => new { d.DealId, d.DealName, d.QuotedAmount, d.FinalAmount,
+                Company = d.Company != null ? d.Company.Name : null,
+                ContactFirst = d.PrimaryContact != null ? d.PrimaryContact.FirstName : null,
+                ContactLast = d.PrimaryContact != null ? d.PrimaryContact.LastName : null,
+                Stage = d.Stage != null ? d.Stage.Name : null,
+                d.Status, d.DealType, d.ProspectSource, d.CloseDate, d.CreatedOn })
+            .ToListAsync();
+
+        var dealIds = rows.Select(r => r.DealId).ToList();
+        var ownerRows = new List<(int DealId, string UserId)>();
+        foreach (var chunk in dealIds.Chunk(1000))
+        {
+            var part = await _context.DealUsers.AsNoTracking()
+                .Where(du => chunk.Contains(du.DealId) && du.RoleInDeal == "Owner")
+                .Select(du => new { du.DealId, du.UserId }).ToListAsync();
+            ownerRows.AddRange(part.Select(p => (p.DealId, p.UserId)));
+        }
+        var ownerUserIds = ownerRows.Select(o => o.UserId).Distinct().ToList();
+        var names = await _context.Users.AsNoTracking().Where(u => ownerUserIds.Contains(u.Id))
+            .Select(u => new { u.Id, Name = u.UserProfile != null ? (u.UserProfile.FirstName + " " + u.UserProfile.LastName) : u.Email })
+            .ToDictionaryAsync(u => u.Id, u => (u.Name ?? "").Trim());
+        var ownerByDeal = ownerRows.GroupBy(o => o.DealId).ToDictionary(g => g.Key, g => names.TryGetValue(g.First().UserId, out var n) ? n : null);
+
+        var typeLabel = new Dictionary<string, string> { ["NewBusiness"] = "Nuevo negocio", ["Upsell"] = "Venta adicional", ["Renewal"] = "Renovación" };
+        var bytes = ProfetAPI.Services.XlsxExport.Build("Oportunidades",
+            new[] { "ID", "Oportunidad", "Monto cotizado", "Monto final", "Empresa", "Contacto", "Etapa", "Estatus", "Tipo", "Fuente", "Fecha de cierre", "Responsable", "Fecha de alta" },
+            rows.Select(r => new object?[] { r.DealId, r.DealName, r.QuotedAmount, r.FinalAmount, r.Company,
+                $"{r.ContactFirst} {r.ContactLast}".Trim(), r.Stage, r.Status,
+                r.DealType != null && typeLabel.TryGetValue(r.DealType, out var t) ? t : r.DealType, r.ProspectSource, r.CloseDate,
+                ownerByDeal.TryGetValue(r.DealId, out var ow) ? ow : null, r.CreatedOn }));
+        return File(bytes, ProfetAPI.Services.XlsxExport.ContentType, $"oportunidades_{DateTime.UtcNow:yyyyMMdd}.xlsx");
+    }
+
     // GET /api/deals/accounts?customerId=&activeOnly=true
     [HttpGet("accounts")]
     [SwaggerOperation(Summary = "Cuentas accesibles (para selector del kanban)")]

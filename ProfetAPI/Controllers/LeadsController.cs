@@ -1727,6 +1727,51 @@ public class LeadsController : ControllerBase
         }
     }
 
+
+    // GET /api/leads/export?accountId=&status=&dateFrom=&dateTo=  — descarga los prospectos de la cuenta en Excel
+    [HttpGet("export")]
+    [SwaggerOperation(Summary = "Exportar prospectos a Excel")]
+    public async Task<IActionResult> ExportLeads([FromQuery] int? accountId, [FromQuery] string? status,
+        [FromQuery] DateTime? dateFrom, [FromQuery] DateTime? dateTo)
+    {
+        int acc;
+        if (accountId.HasValue)
+        {
+            if (!IsAdminGlobal && !await _context.AccountInternalUsers.AnyAsync(a => a.AccountId == accountId && a.UserId == CurrentUserId))
+                return Forbid();
+            acc = accountId.Value;
+        }
+        else
+        {
+            if (IsAdminGlobal) return BadRequest(new { message = "AdminGlobal debe especificar accountId." });
+            var mine = await _context.AccountInternalUsers.Where(a => a.UserId == CurrentUserId).Select(a => (int?)a.AccountId).FirstOrDefaultAsync();
+            if (mine == null) return NotFound(new { message = "Sin cuenta asignada." });
+            acc = mine.Value;
+        }
+
+        // Consulta por cuenta + rango de fecha (usa el índice IX_Leads_AccountId_CreatedOn).
+        var q = _context.Leads.AsNoTracking().Where(l => l.AccountId == acc && (l.Deleted ?? false) == false);
+        if (dateFrom.HasValue) q = q.Where(l => l.CreatedOn >= dateFrom.Value);
+        if (dateTo.HasValue)   q = q.Where(l => l.CreatedOn < dateTo.Value.Date.AddDays(1));
+        if (!string.IsNullOrWhiteSpace(status)) q = q.Where(l => l.Status == status);
+
+        var rows = await q.OrderByDescending(l => l.CreatedOn).Take(20000)
+            .Select(l => new { l.LeadId, l.Name, l.Email, l.Phone, l.Company, l.Position, l.City, l.ProspectSource,
+                l.Status, l.Score, Tier = l.Tier != null ? l.Tier.Name : null, l.OwnerUserId, l.CreatedOn })
+            .ToListAsync();
+
+        var ownerIds = rows.Where(r => r.OwnerUserId != null).Select(r => r.OwnerUserId!).Distinct().ToList();
+        var owners = await _context.Users.AsNoTracking().Where(u => ownerIds.Contains(u.Id))
+            .Select(u => new { u.Id, Name = u.UserProfile != null ? (u.UserProfile.FirstName + " " + u.UserProfile.LastName) : u.Email })
+            .ToDictionaryAsync(u => u.Id, u => (u.Name ?? "").Trim());
+
+        var bytes = ProfetAPI.Services.XlsxExport.Build("Prospectos",
+            new[] { "ID", "Nombre", "Correo", "Teléfono", "Empresa", "Puesto", "Ciudad", "Fuente", "Estatus", "Calificación", "Nivel", "Responsable", "Fecha de alta" },
+            rows.Select(r => new object?[] { r.LeadId, r.Name, r.Email, r.Phone, r.Company, r.Position, r.City, r.ProspectSource,
+                r.Status, r.Score, r.Tier, r.OwnerUserId != null && owners.TryGetValue(r.OwnerUserId, out var o) ? o : null, r.CreatedOn }));
+        return File(bytes, ProfetAPI.Services.XlsxExport.ContentType, $"prospectos_{DateTime.UtcNow:yyyyMMdd}.xlsx");
+    }
+
     // GET /api/leads/customers?activeOnly=true — solo AdminGlobal
     [HttpGet("customers")]
     [Authorize(Roles = "AdminGlobal")]

@@ -30,62 +30,10 @@ public class ContactsController : ControllerBase
         [FromQuery] int page     = 1,
         [FromQuery] int pageSize = 50)
     {
-        int resolvedAccountId;
-        if (accountId.HasValue)
-        {
-            if (!IsAdminGlobal)
-            {
-                var belongs = await _context.AccountInternalUsers
-                    .AnyAsync(a => a.AccountId == accountId && a.UserId == CurrentUserId);
-                if (!belongs) return Forbid();
-            }
-            resolvedAccountId = accountId.Value;
-        }
-        else
-        {
-            if (IsAdminGlobal) return BadRequest(new { message = "AdminGlobal debe especificar accountId." });
-            var assignment = await _context.AccountInternalUsers
-                .Where(a => a.UserId == CurrentUserId)
-                .FirstOrDefaultAsync();
-            if (assignment == null) return NotFound(new { message = "Sin cuenta asignada." });
-            resolvedAccountId = assignment.AccountId;
-        }
+        var (query, error) = await VisibleContactsAsync(accountId, search);
+        if (error != null) return error;
 
-        // Contacts linked to leads OR deals from this account
-        var leadContactIds = await _context.Leads
-            .AsNoTracking()
-            .Where(l => l.AccountId == resolvedAccountId && l.ContactId != null && (l.Deleted ?? false) == false)
-            .Select(l => l.ContactId!.Value)
-            .Distinct()
-            .ToListAsync();
-
-        var dealContactIds = await _context.Deals
-            .AsNoTracking()
-            .Where(d => d.AccountId == resolvedAccountId && d.PrimaryContactId != null)
-            .Select(d => d.PrimaryContactId!.Value)
-            .Distinct()
-            .ToListAsync();
-
-        var ownContactIds = await _context.Contacts.AsNoTracking()
-            .Where(c => c.AccountId == resolvedAccountId).Select(c => c.ContactId).ToListAsync();
-
-        var allContactIds = leadContactIds.Union(dealContactIds).Union(ownContactIds).Distinct().ToList();
-
-        var query = _context.Contacts
-            .AsNoTracking()
-            .Where(c => allContactIds.Contains(c.ContactId));
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            var s = search.Trim();
-            query = query.Where(c =>
-                (c.FirstName != null && c.FirstName.Contains(s)) ||
-                (c.LastName  != null && c.LastName.Contains(s))  ||
-                (c.Email     != null && c.Email.Contains(s))     ||
-                (c.PhoneNumber != null && c.PhoneNumber.Contains(s)));
-        }
-
-        var total = await query.CountAsync();
+        var total = await query!.CountAsync();
 
         var contacts = await query
             .OrderByDescending(c => c.CreatedOn)
@@ -109,6 +57,95 @@ public class ContactsController : ControllerBase
         return Ok(new { total, page, pageSize, data = contacts });
     }
 
+
+    /// <summary>Contactos visibles de una cuenta (propios + ligados a sus prospectos u oportunidades), sin los eliminados.</summary>
+    private async Task<(IQueryable<Contact>? query, IActionResult? error)> VisibleContactsAsync(int? accountId, string? search)
+    {
+        int resolvedAccountId;
+        if (accountId.HasValue)
+        {
+            if (!IsAdminGlobal)
+            {
+                var belongs = await _context.AccountInternalUsers
+                    .AnyAsync(a => a.AccountId == accountId && a.UserId == CurrentUserId);
+                if (!belongs) return (null, Forbid());
+            }
+            resolvedAccountId = accountId.Value;
+        }
+        else
+        {
+            if (IsAdminGlobal) return (null, BadRequest(new { message = "AdminGlobal debe especificar accountId." }));
+            var assignment = await _context.AccountInternalUsers
+                .Where(a => a.UserId == CurrentUserId)
+                .FirstOrDefaultAsync();
+            if (assignment == null) return (null, NotFound(new { message = "Sin cuenta asignada." }));
+            resolvedAccountId = assignment.AccountId;
+        }
+
+        var leadContactIds = await _context.Leads.AsNoTracking()
+            .Where(l => l.AccountId == resolvedAccountId && l.ContactId != null && (l.Deleted ?? false) == false)
+            .Select(l => l.ContactId!.Value).Distinct().ToListAsync();
+        var dealContactIds = await _context.Deals.AsNoTracking()
+            .Where(d => d.AccountId == resolvedAccountId && d.PrimaryContactId != null)
+            .Select(d => d.PrimaryContactId!.Value).Distinct().ToListAsync();
+        var ownContactIds = await _context.Contacts.AsNoTracking()
+            .Where(c => c.AccountId == resolvedAccountId).Select(c => c.ContactId).ToListAsync();
+        var allContactIds = leadContactIds.Union(dealContactIds).Union(ownContactIds).Distinct().ToList();
+
+        var query = _context.Contacts.AsNoTracking().Where(c => !c.Deleted && allContactIds.Contains(c.ContactId));
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var t = search.Trim();
+            query = query.Where(c =>
+                (c.FirstName != null && c.FirstName.Contains(t)) ||
+                (c.LastName  != null && c.LastName.Contains(t))  ||
+                (c.Email     != null && c.Email.Contains(t))     ||
+                (c.PhoneNumber != null && c.PhoneNumber.Contains(t)));
+        }
+        return (query, null);
+    }
+
+    // GET /api/contacts/export?accountId=&search=  — descarga los contactos visibles en Excel
+    [HttpGet("export")]
+    [SwaggerOperation(Summary = "Exportar contactos a Excel")]
+    public async Task<IActionResult> ExportContacts([FromQuery] int? accountId, [FromQuery] string? search)
+    {
+        var (query, error) = await VisibleContactsAsync(accountId, search);
+        if (error != null) return error;
+
+        var rows = await query!.OrderByDescending(c => c.CreatedOn).Take(20000)
+            .Select(c => new { c.ContactId, c.FirstName, c.LastName, c.Email, c.PhoneNumber, c.Position,
+                Company = c.Company != null ? c.Company.Name : null, c.LifecycleStatus, c.CreatedOn })
+            .ToListAsync();
+
+        var bytes = ProfetAPI.Services.XlsxExport.Build("Contactos",
+            new[] { "ID", "Nombre", "Apellido", "Correo", "Teléfono", "Puesto", "Empresa", "Estatus", "Fecha de alta" },
+            rows.Select(r => new object?[] { r.ContactId, r.FirstName, r.LastName, r.Email, r.PhoneNumber, r.Position, r.Company, r.LifecycleStatus, r.CreatedOn }));
+        return File(bytes, ProfetAPI.Services.XlsxExport.ContentType, $"contactos_{DateTime.UtcNow:yyyyMMdd}.xlsx");
+    }
+
+    // DELETE /api/contacts/{id}  — borrado lógico
+    [HttpDelete("{id:int}")]
+    [SwaggerOperation(Summary = "Eliminar contacto (borrado lógico)")]
+    [SwaggerResponse(204, "Eliminado")]
+    [SwaggerResponse(404, "No encontrado")]
+    public async Task<IActionResult> DeleteContact(int id)
+    {
+        var contact = await _context.Contacts.FirstOrDefaultAsync(c => c.ContactId == id && !c.Deleted);
+        if (contact == null) return NotFound(new { message = "Contacto no encontrado." });
+
+        if (!IsAdminGlobal)
+        {
+            var mine = await _context.AccountInternalUsers.Where(a => a.UserId == CurrentUserId).Select(a => a.AccountId).ToListAsync();
+            if (contact.AccountId == null || !mine.Contains(contact.AccountId.Value)) return Forbid();
+        }
+
+        contact.Deleted = true;
+        contact.ModifiedOn = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+
     // GET /api/contacts/{id}
     [HttpGet("{id:int}")]
     [SwaggerOperation(Summary = "Detalle de un contacto")]
@@ -118,7 +155,7 @@ public class ContactsController : ControllerBase
     {
         var contact = await _context.Contacts
             .AsNoTracking()
-            .Where(c => c.ContactId == id)
+            .Where(c => c.ContactId == id && !c.Deleted)
             .Select(c => new
             {
                 c.ContactId, c.FirstName, c.LastName, c.Email,
@@ -198,7 +235,7 @@ public class ContactsController : ControllerBase
     [SwaggerResponse(404, "No encontrado")]
     public async Task<IActionResult> UpdateContact(int id, [FromBody] ContactUpsertDto model)
     {
-        var contact = await _context.Contacts.FindAsync(id);
+        var contact = await _context.Contacts.FirstOrDefaultAsync(c => c.ContactId == id && !c.Deleted);
         if (contact == null) return NotFound(new { message = "Contacto no encontrado." });
 
         contact.FirstName       = model.FirstName       ?? contact.FirstName;

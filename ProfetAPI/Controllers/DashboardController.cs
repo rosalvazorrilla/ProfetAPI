@@ -28,6 +28,87 @@ public class DashboardController : ControllerBase
     private string? CurrentUserRole => User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
     private bool IsAdminGlobal      => CurrentUserRole == "AdminGlobal";
 
+
+    // ── GET /api/dashboard/seller-ranking?accountId=&month=yyyy-MM ────────────
+    [HttpGet("seller-ranking")]
+    [SwaggerOperation(Summary = "Ranking mensual de productividad de los vendedores de la cuenta",
+        Description = "Ordena por monto ganado, luego oportunidades ganadas, tareas completadas y prospectos nuevos. " +
+                      "AdminGlobal, el Admin del cliente y los líderes de equipo ven a todos; el resto ve solo su propia posición.")]
+    public async Task<IActionResult> SellerRanking([FromQuery] int? accountId, [FromQuery] string? month)
+    {
+        int acc;
+        if (accountId.HasValue)
+        {
+            if (!IsAdminGlobal && !await _db.AccountInternalUsers.AnyAsync(a => a.AccountId == accountId && a.UserId == CurrentUserId))
+                return Forbid();
+            acc = accountId.Value;
+        }
+        else
+        {
+            if (IsAdminGlobal) return BadRequest(new { message = "AdminGlobal debe especificar accountId." });
+            var mine = await _db.AccountInternalUsers.Where(a => a.UserId == CurrentUserId).Select(a => (int?)a.AccountId).FirstOrDefaultAsync();
+            if (mine == null) return NotFound(new { message = "Sin cuenta asignada." });
+            acc = mine.Value;
+        }
+
+        var monthStart = DateTime.TryParseExact(month ?? "", "yyyy-MM", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed)
+            ? new DateTime(parsed.Year, parsed.Month, 1, 0, 0, 0, DateTimeKind.Utc)
+            : new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var monthEnd = monthStart.AddMonths(1);
+
+        // ¿Puede ver a todos? AdminGlobal, Admin/ManagerAdmin del cliente o líder de algún equipo del cliente.
+        var canSeeAll = IsAdminGlobal || CurrentUserRole is "Admin" or "ManagerAdmin";
+        if (!canSeeAll && CurrentUserId != null)
+        {
+            var custId = await _db.Accounts.AsNoTracking().Where(a => a.AccountId == acc).Select(a => (int?)a.CustomerId).FirstOrDefaultAsync();
+            canSeeAll = custId != null && await _db.Teams.AsNoTracking().AnyAsync(t => t.CustomerId == custId && t.LeaderId == CurrentUserId);
+        }
+
+        // Miembros de la cuenta
+        var members = await _db.AccountInternalUsers.AsNoTracking().Where(a => a.AccountId == acc)
+            .Select(a => new { a.UserId, Name = a.User.UserProfile != null ? (a.User.UserProfile.FirstName + " " + a.User.UserProfile.LastName) : a.User.Email })
+            .ToListAsync();
+
+        // Oportunidades ganadas en el mes, por responsable (rol Owner)
+        var won = await (from d in _db.Deals.AsNoTracking()
+                         join du in _db.DealUsers.AsNoTracking() on d.DealId equals du.DealId
+                         where d.AccountId == acc && d.Status == "Ganado" && d.CloseDate >= monthStart && d.CloseDate < monthEnd && du.RoleInDeal == "Owner"
+                         group d by du.UserId into g
+                         select new { UserId = g.Key, Count = g.Count(), Amount = g.Sum(x => x.FinalAmount ?? x.QuotedAmount ?? 0m) }).ToListAsync();
+
+        // Prospectos nuevos del mes por responsable (consulta por cuenta + fecha: usa el índice de Leads)
+        var newLeads = await _db.Leads.AsNoTracking()
+            .Where(l => l.AccountId == acc && l.CreatedOn >= monthStart && l.CreatedOn < monthEnd && l.OwnerUserId != null && (l.Deleted ?? false) == false)
+            .GroupBy(l => l.OwnerUserId!).Select(g => new { UserId = g.Key, Count = g.Count() }).ToListAsync();
+
+        // Tareas completadas con fecha límite dentro del mes
+        var tasks = await _db.Activities.AsNoTracking()
+            .Where(a => a.AccountId == acc && a.IsCompleted == true && a.DueDate >= monthStart && a.DueDate < monthEnd && (a.AssignedToUserId != null || a.OwnerUserId != null))
+            .GroupBy(a => a.AssignedToUserId ?? a.OwnerUserId!).Select(g => new { UserId = g.Key, Count = g.Count() }).ToListAsync();
+
+        var rows = members.Select(m =>
+        {
+            var w = won.FirstOrDefault(x => x.UserId == m.UserId);
+            return new
+            {
+                userId = m.UserId,
+                name = (m.Name ?? "").Trim(),
+                won = w?.Count ?? 0,
+                wonAmount = w?.Amount ?? 0m,
+                newLeads = newLeads.FirstOrDefault(x => x.UserId == m.UserId)?.Count ?? 0,
+                tasksDone = tasks.FirstOrDefault(x => x.UserId == m.UserId)?.Count ?? 0,
+            };
+        })
+        .OrderByDescending(r => r.wonAmount).ThenByDescending(r => r.won).ThenByDescending(r => r.tasksDone).ThenByDescending(r => r.newLeads)
+        .Select((r, i) => new { rank = i + 1, r.userId, r.name, r.won, r.wonAmount, r.newLeads, r.tasksDone, isMe = r.userId == CurrentUserId })
+        .ToList();
+
+        // Quien no puede ver a todos solo recibe su propia fila (con su posición real).
+        var visible = canSeeAll ? rows : rows.Where(r => r.isMe).ToList();
+        return Ok(new { month = monthStart.ToString("yyyy-MM"), canSeeAll, totalSellers = rows.Count, rows = visible });
+    }
+
     // ── GET /api/dashboard/stats?accountId=&days=30 ───────────────────────────
 
     [HttpGet("stats")]

@@ -78,7 +78,7 @@ public class SearchController : ControllerBase
         var contactIds = await contactIdsQ.ToListAsync();
 
         var contactsRaw = await _db.Contacts.AsNoTracking()
-            .Where(c => contactIds.Contains(c.ContactId) &&
+            .Where(c => !c.Deleted && contactIds.Contains(c.ContactId) &&
                 (EF.Functions.Like(c.FirstName!, like) || EF.Functions.Like(c.LastName!, like)
                  || EF.Functions.Like(c.Email!, like) || EF.Functions.Like(c.PhoneNumber!, like)))
             .Take(perGroup)

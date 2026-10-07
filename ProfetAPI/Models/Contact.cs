@@ -30,6 +30,9 @@ public class Contact
     /// <summary>true = este contacto llegó / está en el canal de WhatsApp</summary>
     public bool? IsWhatsappContact { get; set; } = false;
 
+    /// <summary>Borrado lógico: el contacto se oculta de listas y búsquedas pero la fila se conserva.</summary>
+    public bool Deleted { get; set; }
+
     // Propiedades de navegación
     public virtual Company? Company { get; set; }
     public virtual ICollection<ContactReferral> ReferralsMade { get; set; } = new List<ContactReferral>();

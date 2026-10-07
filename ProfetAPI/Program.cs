@@ -92,6 +92,7 @@ builder.Services.AddScoped<ProfetAPI.Services.PlaybookService>();
 // Envío automático real de secuencias (Email/WhatsApp) + el job diario que lo dispara
 builder.Services.AddScoped<ProfetAPI.Services.ISequenceDispatchService, ProfetAPI.Services.SequenceDispatchService>();
 builder.Services.AddHostedService<ProfetAPI.Services.SequenceAutomationJob>();
+builder.Services.AddHostedService<ProfetAPI.Services.DueTasksJob>();
 
 // Candado de plan/add-on — ¿el cliente tiene contratada esta función?
 builder.Services.AddScoped<ProfetAPI.Services.IFeatureGateService, ProfetAPI.Services.FeatureGateService>();

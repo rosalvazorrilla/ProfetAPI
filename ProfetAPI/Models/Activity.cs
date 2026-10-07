@@ -39,6 +39,10 @@ public class Activity
     /// despachador deja de reintentarla sola (queda para que el vendedor la resuelva a mano).</summary>
     public int AutomationFailCount { get; set; } = 0;
 
+    /// <summary>Cuándo se avisó que la tarea estaba por vencer / vencida (una sola vez cada aviso).</summary>
+    public DateTime? DueSoonNotifiedOn { get; set; }
+    public DateTime? OverdueNotifiedOn { get; set; }
+
     public virtual ApplicationUser? OwnerUser { get; set; }
     public virtual ApplicationUser? AssignedToUser { get; set; }
     public virtual CallDetail? CallDetail { get; set; }
