@@ -105,6 +105,11 @@ public class Customer
     [Column(TypeName = "decimal(18,2)")]
     public decimal? AiQuantMonthlyCapUsd { get; set; }
 
+    /// <summary>¿Ya está migrado al nuevo esquema de planes (Basic/Premium/Evolution)? El listado
+    /// de clientes muestra por defecto solo los migrados; los demás quedan guardados para consultarlos.</summary>
+    public bool IsMigrated { get; set; }
+    public DateTime? MigratedOn { get; set; }
+
     // --- Propiedades de navegación ---
     // Un cliente tiene muchos usuarios y muchos equipos.
     public virtual ICollection<ApplicationUser> Users { get; set; } = new List<ApplicationUser>();

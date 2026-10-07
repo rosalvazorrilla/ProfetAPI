@@ -50,8 +50,12 @@ namespace ProfetAPI.Dtos
         string? PlanName = null,
         DateTime? CreatedAt = null,
         string? TimeZoneId = null,
-        decimal? AiQuantMonthlyCapUsd = null
+        decimal? AiQuantMonthlyCapUsd = null,
+        bool IsMigrated = false,
+        DateTime? MigratedOn = null
     );
+
+    public record SetMigratedDto(bool Migrated);
 
     public record UpdateCustomerDto(
         string Name,

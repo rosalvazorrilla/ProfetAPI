@@ -71,7 +71,9 @@ namespace ProfetAPI.Controllers
                     null,
                     c.InitialDate,
                     c.TimeZoneId,
-                    c.AiQuantMonthlyCapUsd
+                    c.AiQuantMonthlyCapUsd,
+                    c.IsMigrated,
+                    c.MigratedOn
                 ))
                 .ToListAsync();
 
@@ -126,7 +128,9 @@ namespace ProfetAPI.Controllers
                     null,
                     c.InitialDate,
                     c.TimeZoneId,
-                    c.AiQuantMonthlyCapUsd
+                    c.AiQuantMonthlyCapUsd,
+                    c.IsMigrated,
+                    c.MigratedOn
                 ))
                 .FirstOrDefaultAsync();
 
@@ -204,7 +208,10 @@ namespace ProfetAPI.Controllers
                     SetupToken = Guid.NewGuid().ToString("N"),
                     SetupAccessCode = Random.Shared.Next(0, 1_000_000).ToString("D6"),
                     SetupStep = 1,
-                    Status = "Pendiente de Setup"
+                    Status = "Pendiente de Setup",
+                    // Un cliente que se da de alta ya con su plan nace en el nuevo esquema.
+                    IsMigrated = true,
+                    MigratedOn = DateTime.UtcNow
                 };
                 _context.Customers.Add(customer);
                 await _context.SaveChangesAsync();
@@ -384,7 +391,26 @@ namespace ProfetAPI.Controllers
 
             return Ok(new CustomerResponseDto(customer.Id, customer.Name, customer.Contact, customer.Email, customer.Status,
                 $"{_frontendBaseUrl}/setup?token={customer.SetupToken}", customer.SetupToken, null, null,
-                TimeZoneId: customer.TimeZoneId, AiQuantMonthlyCapUsd: customer.AiQuantMonthlyCapUsd));
+                TimeZoneId: customer.TimeZoneId, AiQuantMonthlyCapUsd: customer.AiQuantMonthlyCapUsd,
+                IsMigrated: customer.IsMigrated, MigratedOn: customer.MigratedOn));
+        }
+
+        // ── PUT api/customers/5/migrated ─────────────────────────────────────
+        [HttpPut("{id}/migrated")]
+        [Authorize(Roles = "AdminGlobal")]
+        [SwaggerOperation(Summary = "Marcar un cliente como migrado (o no) al nuevo esquema de planes")]
+        public async Task<IActionResult> SetMigrated(int id, [FromBody] SetMigratedDto model)
+        {
+            var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
+            if (customer == null) return NotFound(new { message = "El cliente no existe o fue eliminado." });
+
+            if (model.Migrated && !await _context.Subscriptions.AnyAsync(s => s.CustomerId == id))
+                return BadRequest(new { message = "Para marcarlo como migrado primero asígnale un plan." });
+
+            customer.IsMigrated = model.Migrated;
+            customer.MigratedOn = model.Migrated ? (customer.MigratedOn ?? DateTime.UtcNow) : null;
+            await _context.SaveChangesAsync();
+            return Ok(new { id = customer.Id, isMigrated = customer.IsMigrated, migratedOn = customer.MigratedOn });
         }
 
         // ── GET api/customers/5/subscription ────────────────────────────────
