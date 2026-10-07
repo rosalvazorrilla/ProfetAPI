@@ -13,10 +13,20 @@ namespace ProfetAPI.Services;
 public interface IFeatureGateService
 {
     Task<bool> HasFeatureAsync(int customerId, string featureCode);
+
+    /// <summary>Candado para funciones que ya existían antes de los planes: un cliente que NO está migrado
+    /// al nuevo esquema conserva el acceso de siempre; uno migrado solo si su plan (o un complemento) lo incluye.</summary>
+    Task<bool> IsAllowedAsync(int customerId, string featureCode);
 }
 
 public class FeatureGateService(ApplicationDbContext db) : IFeatureGateService
 {
+    public async Task<bool> IsAllowedAsync(int customerId, string featureCode)
+    {
+        var migrated = await db.Customers.AsNoTracking().Where(c => c.Id == customerId).Select(c => c.IsMigrated).FirstOrDefaultAsync();
+        return !migrated || await HasFeatureAsync(customerId, featureCode);
+    }
+
     public async Task<bool> HasFeatureAsync(int customerId, string featureCode)
     {
         var subscription = await db.Subscriptions

@@ -16,10 +16,21 @@ public class AccountEmailController : ControllerBase
     private readonly ApplicationDbContext _context;
     private readonly IEmailService        _emailService;
 
-    public AccountEmailController(ApplicationDbContext context, IEmailService emailService)
+    private readonly ProfetAPI.Services.IFeatureGateService _featureGate;
+
+    public AccountEmailController(ApplicationDbContext context, IEmailService emailService, ProfetAPI.Services.IFeatureGateService featureGate)
     {
         _context      = context;
         _emailService = emailService;
+        _featureGate  = featureGate;
+    }
+
+    /// <summary>Correo (SMTP) propio es de los planes Premium y Evolution. Null = permitido.</summary>
+    private async Task<IActionResult?> PlanBlockAsync(int accountId)
+    {
+        var customerId = await _context.Accounts.Where(a => a.AccountId == accountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        if (customerId == 0 || await _featureGate.IsAllowedAsync(customerId, "SMTP_OWN")) return null;
+        return StatusCode(403, new { message = "El correo (SMTP) propio no está incluido en tu plan.", featureCode = "SMTP_OWN" });
     }
 
     private string? CurrentUserId   => User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
@@ -82,6 +93,8 @@ public class AccountEmailController : ControllerBase
     {
         var resolved = await ResolveAccountId(accountId);
         if (resolved == null) return BadRequest("No se pudo determinar la cuenta.");
+        var blocked = await PlanBlockAsync(resolved.Value);
+        if (blocked != null) return blocked;
 
         var account = await _context.Accounts.FindAsync(resolved);
         if (account == null) return NotFound();

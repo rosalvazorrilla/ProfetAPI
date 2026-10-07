@@ -899,6 +899,8 @@ public class AdminAccountsController : ControllerBase
             return NotFound(new { message = "Cuenta no encontrada." });
         if (string.IsNullOrWhiteSpace(model.Name))
             return BadRequest(new { message = "El nombre es obligatorio (ej. \"Zapier\", \"Sitio web\")." });
+        if (!await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IFeatureGateService>().IsAllowedAsync(customerId, "EXTERNAL_API"))
+            return StatusCode(403, new { message = "La API externa no está incluida en el plan de este cliente.", featureCode = "EXTERNAL_API" });
 
         var raw = _apiKeys.GenerateRawKey();
         var key = new AccountApiKey

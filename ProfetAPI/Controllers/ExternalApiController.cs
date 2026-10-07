@@ -48,13 +48,23 @@ public class ExternalApiController : ControllerBase
             .FirstOrDefaultAsync(k => k.KeyHash == hash && k.IsActive && k.RevokedAt == null);
         if (key == null) return null;
 
+        // API externa es de Evolution; un cliente migrado a otro plan no puede usar sus llaves.
+        var customerId = await _context.Accounts.Where(a => a.AccountId == key.AccountId).Select(a => a.CustomerId).FirstOrDefaultAsync();
+        if (!await HttpContext.RequestServices.GetRequiredService<IFeatureGateService>().IsAllowedAsync(customerId, "EXTERNAL_API"))
+        {
+            HttpContext.Items["planBlocked"] = true;
+            return null;
+        }
+
         key.LastUsedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
         return key;
     }
 
     private IActionResult Unauthenticated() =>
-        Unauthorized(new { message = "API Key inválida, revocada, o falta el header X-Api-Key." });
+        HttpContext.Items.ContainsKey("planBlocked")
+            ? StatusCode(403, new { message = "La API externa no está incluida en el plan de esta cuenta.", featureCode = "EXTERNAL_API" })
+            : Unauthorized(new { message = "API Key inválida, revocada, o falta el header X-Api-Key." });
 
     // ── Prospectos ───────────────────────────────────────────────────────────
 
