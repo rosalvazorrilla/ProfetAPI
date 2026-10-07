@@ -11,6 +11,7 @@ namespace ProfetAPI.Controllers;
 [Route("api/[controller]")]
 [ApiController]
 [Authorize]
+[ServiceFilter(typeof(ProfetAPI.Services.LeadVisibilityFilter))]
 [SwaggerTag("CRM — Prospectos (Leads)")]
 public class LeadsController : ControllerBase
 {
@@ -101,6 +102,14 @@ public class LeadsController : ControllerBase
         // Build query — only load what we need, avoid deep Include chains
         var query = _context.Leads
             .Where(l => l.AccountId == resolvedAccountId && (l.Deleted ?? false) == false);
+
+        // Un vendedor solo ve los prospectos donde es el responsable (o los de su equipo si lo lidera).
+        var visScope = await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IVisibilityService>().ForAccountAsync(User, resolvedAccountId);
+        if (!visScope.All)
+        {
+            var visIds = visScope.UserIds;
+            query = query.Where(l => l.OwnerUserId != null && visIds.Contains(l.OwnerUserId));
+        }
 
         // Filtros
         if (!string.IsNullOrWhiteSpace(search))
@@ -1751,6 +1760,12 @@ public class LeadsController : ControllerBase
 
         // Consulta por cuenta + rango de fecha (usa el índice IX_Leads_AccountId_CreatedOn).
         var q = _context.Leads.AsNoTracking().Where(l => l.AccountId == acc && (l.Deleted ?? false) == false);
+        var expScope = await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IVisibilityService>().ForAccountAsync(User, acc);
+        if (!expScope.All)
+        {
+            var expIds = expScope.UserIds;
+            q = q.Where(l => l.OwnerUserId != null && expIds.Contains(l.OwnerUserId));
+        }
         if (dateFrom.HasValue) q = q.Where(l => l.CreatedOn >= dateFrom.Value);
         if (dateTo.HasValue)   q = q.Where(l => l.CreatedOn < dateTo.Value.Date.AddDays(1));
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(l => l.Status == status);

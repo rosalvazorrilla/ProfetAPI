@@ -34,6 +34,7 @@ public class SendLeadMessageDto
 [Route("api/leads/{leadId:long}/messaging")]
 [ApiController]
 [Authorize]
+[ServiceFilter(typeof(ProfetAPI.Services.LeadVisibilityFilter))]
 [SwaggerTag("CRM — Mensajes al prospecto")]
 public class LeadMessagingController(
     ApplicationDbContext db, IAiClient ai, IFeatureGateService featureGate,

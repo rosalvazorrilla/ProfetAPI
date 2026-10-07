@@ -52,11 +52,17 @@ public class SearchController : ControllerBase
         var like = $"%{q.Trim()}%";
         const int perGroup = 5;
 
+        // Un vendedor solo encuentra sus propios prospectos y oportunidades.
+        var vis = (accIds != null && accIds.Count > 0)
+            ? await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IVisibilityService>().ForAccountAsync(User, accIds[0])
+            : ProfetAPI.Services.VisibleScope.Everything;
+        var visIds = vis.UserIds;
+
         // Leads (directo por AccountId) — si ya se convirtió a Deal, no lo repetimos aquí,
         // la oportunidad ya aparece en el grupo de Deals.
         var leadsRaw = await _db.Leads.AsNoTracking()
             .Where(l => (accIds == null || (l.AccountId != null && accIds.Contains(l.AccountId.Value))) && (l.Deleted ?? false) == false
-                 && l.Status != "Convertido" &&
+                 && l.Status != "Convertido" && (vis.All || (l.OwnerUserId != null && visIds.Contains(l.OwnerUserId))) &&
                 (EF.Functions.Like(l.Name!, like) || EF.Functions.Like(l.Email!, like)
                  || EF.Functions.Like(l.Phone!, like) || EF.Functions.Like(l.Company!, like)))
             .OrderByDescending(l => l.CreatedOn).Take(perGroup)
@@ -65,15 +71,18 @@ public class SearchController : ControllerBase
 
         // Deals (directo por AccountId)
         var dealsRaw = await _db.Deals.AsNoTracking()
-            .Where(d => (accIds == null || accIds.Contains(d.AccountId)) && EF.Functions.Like(d.DealName, like))
+            .Where(d => (accIds == null || accIds.Contains(d.AccountId)) && EF.Functions.Like(d.DealName, like)
+                && (vis.All || d.DealUsers.Any(du => visIds.Contains(du.UserId))))
             .OrderByDescending(d => d.CreatedOn).Take(perGroup)
             .Select(d => new { d.DealId, d.DealName, d.Status, d.AccountId })
             .ToListAsync();
 
         // Contactos y empresas visibles en las cuentas resueltas (vía leads/deals)
-        var contactIdsQ = _db.Leads.Where(l => (accIds == null || (l.AccountId != null && accIds.Contains(l.AccountId.Value))) && l.ContactId != null)
+        var contactIdsQ = _db.Leads.Where(l => (accIds == null || (l.AccountId != null && accIds.Contains(l.AccountId.Value))) && l.ContactId != null
+                    && (vis.All || (l.OwnerUserId != null && visIds.Contains(l.OwnerUserId))))
                 .Select(l => l.ContactId!.Value)
-            .Union(_db.Deals.Where(d => (accIds == null || accIds.Contains(d.AccountId)) && d.PrimaryContactId != null)
+            .Union(_db.Deals.Where(d => (accIds == null || accIds.Contains(d.AccountId)) && d.PrimaryContactId != null
+                    && (vis.All || d.DealUsers.Any(du => visIds.Contains(du.UserId))))
                 .Select(d => d.PrimaryContactId!.Value));
         var contactIds = await contactIdsQ.ToListAsync();
 

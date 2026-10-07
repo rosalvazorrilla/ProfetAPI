@@ -82,14 +82,23 @@ public class ContactsController : ControllerBase
             resolvedAccountId = assignment.AccountId;
         }
 
-        var leadContactIds = await _context.Leads.AsNoTracking()
-            .Where(l => l.AccountId == resolvedAccountId && l.ContactId != null && (l.Deleted ?? false) == false)
-            .Select(l => l.ContactId!.Value).Distinct().ToListAsync();
-        var dealContactIds = await _context.Deals.AsNoTracking()
-            .Where(d => d.AccountId == resolvedAccountId && d.PrimaryContactId != null)
-            .Select(d => d.PrimaryContactId!.Value).Distinct().ToListAsync();
-        var ownContactIds = await _context.Contacts.AsNoTracking()
-            .Where(c => c.AccountId == resolvedAccountId).Select(c => c.ContactId).ToListAsync();
+        // Un vendedor solo ve los contactos ligados a SUS prospectos y oportunidades.
+        var scope = await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IVisibilityService>().ForAccountAsync(User, resolvedAccountId);
+        var visIds = scope.UserIds;
+
+        var leadQ = _context.Leads.AsNoTracking()
+            .Where(l => l.AccountId == resolvedAccountId && l.ContactId != null && (l.Deleted ?? false) == false);
+        if (!scope.All) leadQ = leadQ.Where(l => l.OwnerUserId != null && visIds.Contains(l.OwnerUserId));
+        var leadContactIds = await leadQ.Select(l => l.ContactId!.Value).Distinct().ToListAsync();
+
+        var dealQ = _context.Deals.AsNoTracking()
+            .Where(d => d.AccountId == resolvedAccountId && d.PrimaryContactId != null);
+        if (!scope.All) dealQ = dealQ.Where(d => d.DealUsers.Any(du => visIds.Contains(du.UserId)));
+        var dealContactIds = await dealQ.Select(d => d.PrimaryContactId!.Value).Distinct().ToListAsync();
+
+        var ownContactIds = scope.All
+            ? await _context.Contacts.AsNoTracking().Where(c => c.AccountId == resolvedAccountId).Select(c => c.ContactId).ToListAsync()
+            : new List<int>();
         var allContactIds = leadContactIds.Union(dealContactIds).Union(ownContactIds).Distinct().ToList();
 
         var query = _context.Contacts.AsNoTracking().Where(c => !c.Deleted && allContactIds.Contains(c.ContactId));

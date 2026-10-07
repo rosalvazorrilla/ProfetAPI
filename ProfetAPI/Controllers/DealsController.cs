@@ -15,6 +15,7 @@ public record StageDealRow(
 [Route("api/[controller]")]
 [ApiController]
 [Authorize]
+[ServiceFilter(typeof(ProfetAPI.Services.DealVisibilityFilter))]
 [SwaggerTag("CRM — Oportunidades (Deals)")]
 public class DealsController : ControllerBase
 {
@@ -101,6 +102,14 @@ public class DealsController : ControllerBase
         var baseQ = _context.Deals
             .AsNoTracking()
             .Where(d => d.AccountId == resolvedAccountId);
+
+        // Un vendedor solo ve las oportunidades donde participa (o las de su equipo si lo lidera).
+        var visScope = await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IVisibilityService>().ForAccountAsync(User, resolvedAccountId);
+        if (!visScope.All)
+        {
+            var visIds = visScope.UserIds;
+            baseQ = baseQ.Where(d => d.DealUsers.Any(du => visIds.Contains(du.UserId)));
+        }
 
         if (!string.IsNullOrWhiteSpace(status))
             baseQ = baseQ.Where(d => d.Status == status);
@@ -247,6 +256,13 @@ public class DealsController : ControllerBase
             .Include(d => d.Company)
             .Include(d => d.DealUsers).ThenInclude(du => du.User).ThenInclude(u => u.UserProfile)
             .Where(d => d.AccountId == resolvedAccountId && d.StageId == stageId);
+
+        var stageScope = await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IVisibilityService>().ForAccountAsync(User, resolvedAccountId);
+        if (!stageScope.All)
+        {
+            var stageIds = stageScope.UserIds;
+            query = query.Where(d => d.DealUsers.Any(du => stageIds.Contains(du.UserId)));
+        }
 
         if (!string.IsNullOrWhiteSpace(status))   query = query.Where(d => d.Status == status);
         if (!string.IsNullOrWhiteSpace(ownerId))  query = query.Where(d => d.DealUsers.Any(du => du.UserId == ownerId));
@@ -640,6 +656,12 @@ public class DealsController : ControllerBase
         }
 
         var q = _context.Deals.AsNoTracking().Where(d => d.AccountId == acc);
+        var expScope = await HttpContext.RequestServices.GetRequiredService<ProfetAPI.Services.IVisibilityService>().ForAccountAsync(User, acc);
+        if (!expScope.All)
+        {
+            var expIds = expScope.UserIds;
+            q = q.Where(d => d.DealUsers.Any(du => expIds.Contains(du.UserId)));
+        }
         if (!string.IsNullOrWhiteSpace(status)) q = q.Where(d => d.Status == status);
 
         var rows = await q.OrderByDescending(d => d.CreatedOn).Take(20000)

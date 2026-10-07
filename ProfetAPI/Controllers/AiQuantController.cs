@@ -15,6 +15,7 @@ namespace ProfetAPI.Controllers;
 [Route("api")]
 [ApiController]
 [Authorize]
+[ServiceFilter(typeof(ProfetAPI.Services.LeadVisibilityFilter))]
 [SwaggerTag("CRM — AI QUANT (investigación IA del prospecto)")]
 public class AiQuantController(
     ApplicationDbContext db,

@@ -96,6 +96,9 @@ builder.Services.AddHostedService<ProfetAPI.Services.DueTasksJob>();
 
 // Candado de plan/add-on — ¿el cliente tiene contratada esta función?
 builder.Services.AddScoped<ProfetAPI.Services.IFeatureGateService, ProfetAPI.Services.FeatureGateService>();
+builder.Services.AddScoped<ProfetAPI.Services.IVisibilityService, ProfetAPI.Services.VisibilityService>();
+builder.Services.AddScoped<ProfetAPI.Services.LeadVisibilityFilter>();
+builder.Services.AddScoped<ProfetAPI.Services.DealVisibilityFilter>();
 builder.Services.AddScoped<ProfetAPI.Services.IPlanLimitsService, ProfetAPI.Services.PlanLimitsService>();
 builder.Services.AddScoped<ProfetAPI.Services.PmScopeService>();
 
