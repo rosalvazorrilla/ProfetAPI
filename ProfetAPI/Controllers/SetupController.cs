@@ -2459,7 +2459,7 @@ namespace ProfetAPI.Controllers
 
             // Construir ruta de destino
             var extension = Path.GetExtension(file.FileName).ToLower();
-            var folder = Path.Combine(_webHostEnvironment.WebRootPath, "uploads", "branding", customer.Id.ToString());
+            var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(_webHostEnvironment), "branding", customer.Id.ToString());
             Directory.CreateDirectory(folder);
 
             var fileName = $"{type}_{customer.Id}{extension}";

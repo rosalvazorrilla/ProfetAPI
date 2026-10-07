@@ -180,7 +180,7 @@ namespace ProfetAPI.Controllers
                 return BadRequest(new { message = "El parámetro 'type' debe ser: logo-large, logo-small, logo-login o favicon." });
 
             var extension = Path.GetExtension(file.FileName).ToLower();
-            var folder = Path.Combine(_webHostEnvironment.WebRootPath, "uploads", "branding", "global");
+            var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(_webHostEnvironment), "branding", "global");
             Directory.CreateDirectory(folder);
 
             var fileName = $"{type}{extension}";

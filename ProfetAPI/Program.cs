@@ -258,7 +258,17 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-// Archivos estáticos (logos, favicons subidos por clientes)
+// Archivos subidos (logos, favicons): en Azure viven en HOME/data/uploads para sobrevivir a los deploys.
+// Si un archivo no está ahí, la petición sigue al wwwroot normal (los logos originales versionados en git).
+var uploadsRoot = ProfetAPI.Services.UploadStorage.Root(app.Environment);
+Directory.CreateDirectory(uploadsRoot);
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(uploadsRoot),
+    RequestPath = "/uploads",
+});
+
+// Archivos estáticos (wwwroot)
 app.UseStaticFiles();
 
 // CORS — usa la política definida arriba (SetIsOriginAllowed + AllowCredentials)
