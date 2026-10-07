@@ -20,14 +20,16 @@ namespace ProfetAPI.Controllers;
 [SwaggerTag("Admin Global — Cuentas de Clientes")]
 public class AdminAccountsController : ControllerBase
 {
+    private readonly ProfetAPI.Services.IPlanLimitsService _planLimits;
     private readonly ApplicationDbContext _context;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly ProfetAPI.Services.SecretProtector _secrets;
     private readonly ProfetAPI.Services.PmScopeService _pmScope;
     private readonly ProfetAPI.Services.ApiKeyService _apiKeys;
 
-    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.SecretProtector secrets, ProfetAPI.Services.PmScopeService pmScope, ProfetAPI.Services.ApiKeyService apiKeys)
+    public AdminAccountsController(ApplicationDbContext context, UserManager<ApplicationUser> userManager, ProfetAPI.Services.SecretProtector secrets, ProfetAPI.Services.PmScopeService pmScope, ProfetAPI.Services.ApiKeyService apiKeys, ProfetAPI.Services.IPlanLimitsService planLimits)
     {
+        _planLimits = planLimits;
         _context = context;
         _userManager = userManager;
         _secrets = secrets;
@@ -151,11 +153,25 @@ public class AdminAccountsController : ControllerBase
     [SwaggerOperation(Summary = "Crear cuenta para el cliente")]
     [SwaggerResponse(201, "Cuenta creada", typeof(AdminAccountResponseDto))]
     [SwaggerResponse(404, "Cliente no encontrado")]
-    public async Task<IActionResult> Create(int customerId, [FromBody] CreateAdminAccountDto model)
+    public async Task<IActionResult> Create(int customerId, [FromBody] CreateAdminAccountDto model, [FromQuery] bool force = false)
     {
         if (!ModelState.IsValid) return BadRequest(ModelState);
         if (!await CustomerExists(customerId))
             return NotFound(new { message = "Cliente no encontrado." });
+
+        // Tope de cuentas del plan (Basic 1 / Premium 3 / Evolution 5). El equipo de Profet puede
+        // sobrepasarlo a propósito con force=true (la pantalla le pide confirmación).
+        var accLimit = await _planLimits.GetLimitAsync(customerId, ProfetAPI.Services.PlanLimitsService.AccountsFeature);
+        if (!force && accLimit?.Limit is int maxAccounts)
+        {
+            var existing = await _context.Accounts.CountAsync(a => a.CustomerId == customerId);
+            if (existing >= maxAccounts)
+                return Conflict(new
+                {
+                    code = "PLAN_LIMIT", limit = maxAccounts, used = existing,
+                    message = $"El plan {accLimit.PlanName} de este cliente incluye {maxAccounts} cuenta(s) y ya tiene {existing}.",
+                });
+        }
 
         var account = new Account
         {

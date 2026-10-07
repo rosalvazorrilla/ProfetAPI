@@ -19,6 +19,7 @@ namespace ProfetAPI.Controllers;
 public class AiQuantController(
     ApplicationDbContext db,
     IFeatureGateService featureGate,
+    IPlanLimitsService planLimits,
     IAiQuantService aiQuant) : ControllerBase
 {
     private const string FeatureCode = "AI_QUANT_LEAD_SCORE";
@@ -54,6 +55,19 @@ public class AiQuantController(
 
         if (!aiQuant.IsConfigured)
             return StatusCode(503, new { message = "El análisis con IA no está disponible en este momento." });
+
+        // Tope de consultas del plan (Basic 5 / Premium 20 / Evolution 50 al mes). Sin tope = solo aplica el de gasto.
+        var planLimit = await planLimits.GetLimitAsync(customerId, FeatureCode);
+        if (planLimit?.Limit is int maxRuns)
+        {
+            var used = await planLimits.AiRunsThisMonthAsync(customerId);
+            if (used >= maxRuns)
+                return StatusCode(402, new
+                {
+                    message = $"Llegaste al límite de {maxRuns} consultas del Analista AI de tu plan {planLimit.PlanName} este mes. Sube de plan para tener más.",
+                    code = "PLAN_LIMIT", limit = maxRuns, used,
+                });
+        }
 
         // Chequeo de tope mensual (soft): gasto del mes en curso + costo estimado de esta corrida.
         var cap = await db.Customers.AsNoTracking()
