@@ -30,6 +30,9 @@ public class GlobalBranding
     [Column("SecondaryColor")]
     public string? SecondaryColor { get; set; }    // Hex, ej: #5F6CAF
 
+    [Column("LoginLogoUrl")]
+    public string? LoginLogoUrl { get; set; }      // Logo blanco SOLO para la pantalla de login de la plataforma
+
     [Column("FaviconUrl")]
     public string? FaviconUrl { get; set; }        // .ico o PNG 32x32
 }

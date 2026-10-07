@@ -114,7 +114,7 @@ namespace ProfetAPI.Controllers
 
         // GET /api/branding/admin
         [HttpGet("admin")]
-        [Authorize]
+        [Authorize(Roles = "AdminGlobal")]
         [SwaggerOperation(Summary = "Obtener branding global (admin)", Description = "Requiere JWT de AdminGlobal.")]
         [SwaggerResponse(200, "Branding global")]
         [SwaggerResponse(401, "No autenticado")]
@@ -126,7 +126,7 @@ namespace ProfetAPI.Controllers
 
         // PUT /api/branding/admin
         [HttpPut("admin")]
-        [Authorize]
+        [Authorize(Roles = "AdminGlobal")]
         [SwaggerOperation(
             Summary = "Actualizar branding global (admin)",
             Description = "Actualiza nombre, colores y URLs de logo. Los campos null eliminan la personalización."
@@ -140,6 +140,7 @@ namespace ProfetAPI.Controllers
             row.AppName        = model.AppName?.Trim();
             row.LogoLargeUrl   = model.LogoLargeUrl?.Trim();
             row.LogoSmallUrl   = model.LogoSmallUrl?.Trim();
+            row.LoginLogoUrl   = model.LoginLogoUrl?.Trim();
             row.PrimaryColor   = model.PrimaryColor?.Trim();
             row.SecondaryColor = model.SecondaryColor?.Trim();
             row.FaviconUrl     = model.FaviconUrl?.Trim();
@@ -150,11 +151,11 @@ namespace ProfetAPI.Controllers
 
         // POST /api/branding/admin/upload?type=logo-large|logo-small|favicon
         [HttpPost("admin/upload")]
-        [Authorize]
+        [Authorize(Roles = "AdminGlobal")]
         [Consumes("multipart/form-data")]
         [SwaggerOperation(
             Summary = "Subir imagen de branding global (admin)",
-            Description = "Sube logo grande, logo pequeño o favicon del sistema. Máx 2 MB. Tipos: logo-large, logo-small, favicon."
+            Description = "Sube logo grande, logo pequeño, logo de login o favicon del sistema. Máx 2 MB. Tipos: logo-large, logo-small, logo-login, favicon."
         )]
         [SwaggerResponse(200, "URL pública del archivo subido")]
         [SwaggerResponse(400, "Archivo inválido")]
@@ -174,9 +175,9 @@ namespace ProfetAPI.Controllers
             if (!allowedMimes.Contains(file.ContentType.ToLower()))
                 return BadRequest(new { message = "Solo se permiten imágenes (PNG, JPG, SVG, ICO, WebP)." });
 
-            var validTypes = new[] { "logo-large", "logo-small", "favicon" };
+            var validTypes = new[] { "logo-large", "logo-small", "logo-login", "favicon" };
             if (!validTypes.Contains(type))
-                return BadRequest(new { message = "El parámetro 'type' debe ser: logo-large, logo-small o favicon." });
+                return BadRequest(new { message = "El parámetro 'type' debe ser: logo-large, logo-small, logo-login o favicon." });
 
             var extension = Path.GetExtension(file.FileName).ToLower();
             var folder = Path.Combine(_webHostEnvironment.WebRootPath, "uploads", "branding", "global");
@@ -195,6 +196,7 @@ namespace ProfetAPI.Controllers
             var row = await GetOrCreateGlobal();
             if (type == "logo-large")   row.LogoLargeUrl  = publicUrl;
             if (type == "logo-small")   row.LogoSmallUrl  = publicUrl;
+            if (type == "logo-login")   row.LoginLogoUrl  = publicUrl;
             if (type == "favicon")      row.FaviconUrl    = publicUrl;
             await _context.SaveChangesAsync();
 
@@ -208,6 +210,7 @@ namespace ProfetAPI.Controllers
             appName        = row.AppName,
             logoLargeUrl   = row.LogoLargeUrl,
             logoSmallUrl   = row.LogoSmallUrl,
+            loginLogoUrl   = row.LoginLogoUrl,
             primaryColor   = row.PrimaryColor,
             secondaryColor = row.SecondaryColor,
             faviconUrl     = row.FaviconUrl,
@@ -221,6 +224,7 @@ namespace ProfetAPI.Controllers
         public string? AppName        { get; set; }
         public string? LogoLargeUrl   { get; set; }
         public string? LogoSmallUrl   { get; set; }
+        public string? LoginLogoUrl   { get; set; }
         public string? PrimaryColor   { get; set; }
         public string? SecondaryColor { get; set; }
         public string? FaviconUrl     { get; set; }
