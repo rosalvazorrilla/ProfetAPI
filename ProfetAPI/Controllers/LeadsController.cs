@@ -1733,7 +1733,9 @@ public class LeadsController : ControllerBase
     [SwaggerOperation(Summary = "Lista de clientes (AdminGlobal)")]
     public async Task<IActionResult> GetCustomers([FromQuery] bool activeOnly = true)
     {
-        var q = _context.Customers.AsNoTracking().Where(c => (c.Deleted ?? false) == false);
+        // Los selectores operativos solo ofrecen clientes ya migrados al nuevo esquema de planes (o dados de alta con él);
+        // la lista completa sigue en Administración > Clientes.
+        var q = _context.Customers.AsNoTracking().Where(c => (c.Deleted ?? false) == false && c.IsMigrated);
         if (activeOnly) q = q.Where(c => c.Active == true);
         var list = await q
             .OrderBy(c => c.Name)

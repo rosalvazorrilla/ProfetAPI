@@ -134,7 +134,7 @@ public class AdminAccountsController : ControllerBase
             return NotFound(new { message = "Cliente no encontrado." });
 
         var accounts = await _context.Accounts
-            .Where(a => a.CustomerId == customerId)
+            .Where(a => a.CustomerId == customerId && a.Status != "Eliminada")
             .Select(a => new AdminAccountResponseDto
             {
                 AccountId = a.AccountId,
@@ -164,7 +164,7 @@ public class AdminAccountsController : ControllerBase
         var accLimit = await _planLimits.GetLimitAsync(customerId, ProfetAPI.Services.PlanLimitsService.AccountsFeature);
         if (!force && accLimit?.Limit is int maxAccounts)
         {
-            var existing = await _context.Accounts.CountAsync(a => a.CustomerId == customerId);
+            var existing = await _context.Accounts.CountAsync(a => a.CustomerId == customerId && a.Status != "Eliminada");
             if (existing >= maxAccounts)
                 return Conflict(new
                 {
@@ -210,7 +210,7 @@ public class AdminAccountsController : ControllerBase
 
     // DELETE /api/admin/customers/{customerId}/accounts/{accountId}
     [HttpDelete("{accountId}")]
-    [SwaggerOperation(Summary = "Eliminar cuenta (solo en estado Borrador)")]
+    [SwaggerOperation(Summary = "Eliminar cuenta (borrado lógico: queda como 'Eliminada')", Description = "No se permite si la cuenta aún tiene prospectos u oportunidades vigentes. No es un borrado físico: la fila se conserva para auditoría.")]
     [SwaggerResponse(204, "Eliminada")]
     [SwaggerResponse(400, "No se puede eliminar una cuenta activa")]
     [SwaggerResponse(404, "Cuenta no encontrada")]
@@ -218,10 +218,13 @@ public class AdminAccountsController : ControllerBase
     {
         var account = await GetAccount(customerId, accountId);
         if (account == null) return NotFound(new { message = "Cuenta no encontrada." });
-        if (account.Status == "Activo")
-            return BadRequest(new { message = "No se puede eliminar una cuenta activa." });
+        var hasLeads = await _context.Leads.AnyAsync(l => l.AccountId == accountId && (l.Deleted ?? false) == false);
+        var hasDeals = await _context.Deals.AnyAsync(d => d.AccountId == accountId);
+        if (hasLeads || hasDeals)
+            return BadRequest(new { message = "La cuenta aún tiene prospectos u oportunidades; muévelos o elimínalos antes de borrarla." });
 
-        _context.Accounts.Remove(account);
+        // Borrado lógico: el borrado físico revisa decenas de tablas relacionadas y deja huérfanos si algo apunta a la cuenta.
+        account.Status = "Eliminada";
         await _context.SaveChangesAsync();
         return NoContent();
     }
