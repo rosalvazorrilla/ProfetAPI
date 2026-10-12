@@ -8,7 +8,7 @@ using ProfetAPI.Models;
 namespace ProfetAPI.Services;
 
 /// <summary>
-/// "AI QUANT — Lead Score": investiga la EMPRESA de un prospecto con búsqueda web pública
+/// "Analista AI": investiga la EMPRESA de un prospecto con búsqueda web pública
 /// (sitio, redes, noticias, vacantes, directorios) + el contexto que aportó el vendedor
 /// tras el First Contact Call, y produce una ficha estructurada (presencia digital, perfil
 /// del negocio, score cualitativo 0-100, estrategia comercial, fuentes). Distinto del BANT:
@@ -171,18 +171,18 @@ public class AiQuantService(
             // detectado: la IA terminaba "recordando" una empresa que nunca estuvo en el
             // lead, solo porque su propio resumen anterior quedó marcado como nota humana).
             await timeline.LogAsync(run.AccountId, "Lead", run.LeadId, "ai_quant",
-                $"AI QUANT: {tier ?? "sin tier"} · {score} pts",
+                $"Analista AI: {tier ?? "sin tier"} · {score} pts",
                 detail: parsed.RootElement.TryGetProperty("summary", out var su) ? su.GetString() : null,
                 userId: run.RunByUserId);
 
             if (!string.IsNullOrWhiteSpace(lead.OwnerUserId))
                 await notif.NotifyAsync(lead.OwnerUserId!,
-                    $"AI QUANT listo para {lead.Name}: {tier ?? "sin tier"} · {score} pts",
+                    $"Analista AI listo para {lead.Name}: {tier ?? "sin tier"} · {score} pts",
                     url: $"/prospectos?id={run.LeadId}", entityType: "Lead", entityId: run.LeadId);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Falló la corrida AI QUANT {RunId}", runId);
+            logger.LogWarning(ex, "Falló la corrida Analista AI {RunId}", runId);
             await FailAsync(run, ex is HttpRequestException ? "La IA no pudo completar la investigación — intenta de nuevo." : ex.Message, sw, ct);
         }
     }

@@ -10,13 +10,13 @@ using Swashbuckle.AspNetCore.Annotations;
 
 namespace ProfetAPI.Controllers;
 
-// ── AI QUANT — Lead Score: lanzar y consultar corridas de investigación IA ──
+// ── Analista AI: lanzar y consultar corridas de investigación IA ──
 
 [Route("api")]
 [ApiController]
 [Authorize]
 [ServiceFilter(typeof(ProfetAPI.Services.LeadVisibilityFilter))]
-[SwaggerTag("CRM — AI QUANT (investigación IA del prospecto)")]
+[SwaggerTag("CRM — Analista AI (investigación IA del prospecto)")]
 public class AiQuantController(
     ApplicationDbContext db,
     IFeatureGateService featureGate,
@@ -31,7 +31,7 @@ public class AiQuantController(
 
     // ── POST /api/leads/{id}/ai-quant/run ─────────────────────────────────────
     [HttpPost("leads/{id:long}/ai-quant/run")]
-    [SwaggerOperation(Summary = "Lanzar una corrida de AI QUANT para un prospecto (async)")]
+    [SwaggerOperation(Summary = "Lanzar una corrida de Analista AI para un prospecto (async)")]
     public async Task<IActionResult> Run(long id, [FromBody] AiQuantRunRequest? req)
     {
         var lead = await db.Leads.AsNoTracking()
@@ -80,7 +80,7 @@ public class AiQuantController(
                 .Where(r => r.CustomerId == customerId && r.CreatedOn >= monthStart && r.CostUsd != null)
                 .SumAsync(r => r.CostUsd) ?? 0m;
             if (spent + EstimatedRunCostUsd > cap.Value)
-                return StatusCode(402, new { message = "Llegaste al tope mensual de AI QUANT. Contacta a tu administrador para subirlo." });
+                return StatusCode(402, new { message = "Llegaste al tope mensual de Analista AI. Contacta a tu administrador para subirlo." });
         }
 
         // Ya hay una corrida en curso para este lead — no encimar.
@@ -106,7 +106,7 @@ public class AiQuantController(
 
     // ── GET /api/leads/{id}/ai-quant ──────────────────────────────────────────
     [HttpGet("leads/{id:long}/ai-quant")]
-    [SwaggerOperation(Summary = "Corrida más reciente de AI QUANT del prospecto (para polling)")]
+    [SwaggerOperation(Summary = "Corrida más reciente de Analista AI del prospecto (para polling)")]
     public async Task<IActionResult> Latest(long id)
     {
         var run = await db.AiQuantRuns.AsNoTracking()
@@ -136,7 +136,7 @@ public class AiQuantController(
 
     // ── GET /api/leads/{id}/ai-quant/history ──────────────────────────────────
     [HttpGet("leads/{id:long}/ai-quant/history")]
-    [SwaggerOperation(Summary = "Corridas pasadas de AI QUANT del prospecto")]
+    [SwaggerOperation(Summary = "Corridas pasadas de Analista AI del prospecto")]
     public async Task<IActionResult> History(long id, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
         var q = db.AiQuantRuns.AsNoTracking().Where(r => r.LeadId == id);
@@ -171,7 +171,7 @@ public class AiQuantController(
 
     // ── GET /api/ai-quant/usage?customerId=&month=yyyy-MM ──────────────────────
     [HttpGet("ai-quant/usage")]
-    [SwaggerOperation(Summary = "Gasto de AI QUANT del cliente en un mes")]
+    [SwaggerOperation(Summary = "Gasto de Analista AI del cliente en un mes")]
     public async Task<IActionResult> Usage([FromQuery] int? customerId, [FromQuery] string? month)
     {
         int custId;

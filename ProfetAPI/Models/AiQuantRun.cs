@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace ProfetAPI.Models;
 
 /// <summary>
-/// Una corrida de "AI QUANT — Lead Score": la investigación de IA (con búsqueda web
+/// Una corrida de "Analista AI": la investigación de IA (con búsqueda web
 /// pública) sobre la EMPRESA de un prospecto. Se guarda una fila por corrida — al
 /// re-ejecutar se crea otra; la más reciente en estado "Done" es la que se muestra.
 /// Incluye el ledger de costo (tokens + búsquedas + USD) para el tope mensual por cliente.

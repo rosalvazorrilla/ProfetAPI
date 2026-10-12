@@ -60,7 +60,7 @@ public class AdminReportController(ApplicationDbContext db) : ControllerBase
             (l.Status == "Nuevo" || l.Status == "Contactado" || l.Status == "Calificado") &&
             (l.OwnerUserId == null || (l.Status == "Nuevo" ? l.CreatedOn < now.AddHours(-24) : l.CreatedOn < now.AddDays(-3))));
 
-        // ── AI QUANT ──────────────────────────────────────────────────────────────
+        // ── Analista AI ──────────────────────────────────────────────────────────────
         var aiQuantQ = db.AiQuantRuns.AsNoTracking()
             .Where(r => r.CreatedOn >= from && accountIds.Contains(r.AccountId));
         var aiQuantRuns = await aiQuantQ.CountAsync(r => r.Status == "Done");

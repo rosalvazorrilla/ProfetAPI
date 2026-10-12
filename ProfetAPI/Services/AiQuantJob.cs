@@ -4,7 +4,7 @@ using ProfetAPI.Data;
 namespace ProfetAPI.Services;
 
 /// <summary>
-/// Procesa las corridas de "AI QUANT — Lead Score" en segundo plano: toma las filas
+/// Procesa las corridas de "Analista AI" en segundo plano: toma las filas
 /// AiQuantRun en estado "Pending" y las ejecuta una por una. Se eligió un job durable
 /// (no Task.Run) porque cada corrida es cara, debe sobrevivir reinicios y necesita que
 /// el ledger de costo quede confiable. Mismo patrón que SequenceAutomationJob.
@@ -23,7 +23,7 @@ public class AiQuantJob(
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await RunOnceAsync(stoppingToken); }
-            catch (Exception ex) { logger.LogError(ex, "Error en la corrida del job de AI QUANT"); }
+            catch (Exception ex) { logger.LogError(ex, "Error en la corrida del job de Analista AI"); }
 
             try { await Task.Delay(PollInterval, stoppingToken); }
             catch (TaskCanceledException) { }
@@ -68,7 +68,7 @@ public class AiQuantJob(
             {
                 var run = await db.AiQuantRuns.FirstAsync(r => r.RunId == p.RunId, ct);
                 run.Status = "Failed";
-                run.Error = "El cliente ya no tiene la función AI QUANT contratada.";
+                run.Error = "El cliente ya no tiene la función Analista AI contratada.";
                 run.CompletedOn = DateTime.UtcNow;
                 await db.SaveChangesAsync(ct);
                 continue;

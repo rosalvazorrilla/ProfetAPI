@@ -384,7 +384,7 @@ namespace ProfetAPI.Controllers
             customer.Contact = model.Contact;
             customer.Phone = model.Phone;
             if (model.TimeZoneId != null) customer.TimeZoneId = model.TimeZoneId;
-            // Solo AdminGlobal ajusta el tope de AI QUANT (el DTO llega con -1 para "borrar" el tope → NULL).
+            // Solo AdminGlobal ajusta el tope de Analista AI (el DTO llega con -1 para "borrar" el tope → NULL).
             if (model.AiQuantMonthlyCapUsd.HasValue && User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value == "AdminGlobal")
                 customer.AiQuantMonthlyCapUsd = model.AiQuantMonthlyCapUsd.Value < 0 ? null : model.AiQuantMonthlyCapUsd.Value;
             await _context.SaveChangesAsync();
