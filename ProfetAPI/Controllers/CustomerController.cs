@@ -20,9 +20,14 @@ namespace ProfetAPI.Controllers
         private readonly ILogger<CustomersController> _logger;
         private readonly ProfetAPI.Services.PmScopeService _pmScope;
         private readonly string _frontendBaseUrl;
+        private readonly IWebHostEnvironment _webHostEnvironment;
+        private readonly string? _apiBaseUrl;
 
-        public CustomersController(ApplicationDbContext context, IConfiguration configuration, IEmailService emailService, ILogger<CustomersController> logger, ProfetAPI.Services.PmScopeService pmScope)
+        public CustomersController(ApplicationDbContext context, IConfiguration configuration, IEmailService emailService, ILogger<CustomersController> logger, ProfetAPI.Services.PmScopeService pmScope, IWebHostEnvironment webHostEnvironment)
         {
+            _webHostEnvironment = webHostEnvironment;
+            // Base fija para URLs públicas de logos (igual que en el wizard): no usar Request.Host.
+            _apiBaseUrl = configuration["Api:BaseUrl"]?.TrimEnd('/');
             _context = context;
             _emailService = emailService;
             _logger = logger;
@@ -415,6 +420,87 @@ namespace ProfetAPI.Controllers
             // gratuito (PricePaid = 0) para no quitarle nada de un día para otro.
             var gifts = model.Migrated ? await GrantLegacyGiftsAsync(customer) : new List<string>();
             return Ok(new { id = customer.Id, isMigrated = customer.IsMigrated, migratedOn = customer.MigratedOn, gifts });
+        }
+
+        // ── Marca del cliente (logos, colores): mismo contenido que el paso de marca del wizard, pero para AdminGlobal ──
+
+        private static SetupBrandingResponseDto ToBrandingDto(Customer c) => new()
+        {
+            BrandName = c.BrandName,
+            BrandLogoUrl = c.BrandLogoUrl,
+            BrandLogoSmallUrl = c.BrandLogoSmallUrl,
+            BrandPrimaryColor = c.BrandPrimaryColor,
+            BrandSecondaryColor = c.BrandSecondaryColor,
+            BrandFaviconUrl = c.BrandFaviconUrl,
+            IsCustomized = c.BrandName != null || c.BrandLogoUrl != null || c.BrandLogoSmallUrl != null
+                || c.BrandPrimaryColor != null || c.BrandSecondaryColor != null || c.BrandFaviconUrl != null,
+        };
+
+        // GET api/customers/5/branding
+        [HttpGet("{id}/branding")]
+        [Authorize(Roles = "AdminGlobal")]
+        [SwaggerOperation(Summary = "Marca del cliente (nombre de la app, logos y colores)")]
+        public async Task<IActionResult> GetBranding(int id)
+        {
+            var customer = await _context.Customers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
+            if (customer == null) return NotFound(new { message = "El cliente no existe o fue eliminado." });
+            return Ok(ToBrandingDto(customer));
+        }
+
+        // PUT api/customers/5/branding
+        [HttpPut("{id}/branding")]
+        [Authorize(Roles = "AdminGlobal")]
+        [SwaggerOperation(Summary = "Guardar la marca del cliente", Description = "Un campo en null elimina esa personalización (vuelve al default de Profet).")]
+        public async Task<IActionResult> SaveBranding(int id, [FromBody] SetupBrandingDto model)
+        {
+            var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
+            if (customer == null) return NotFound(new { message = "El cliente no existe o fue eliminado." });
+
+            static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+            customer.BrandName = Clean(model.BrandName);
+            customer.BrandLogoUrl = Clean(model.BrandLogoUrl);
+            customer.BrandLogoSmallUrl = Clean(model.BrandLogoSmallUrl);
+            customer.BrandPrimaryColor = Clean(model.BrandPrimaryColor);
+            customer.BrandSecondaryColor = Clean(model.BrandSecondaryColor);
+            customer.BrandFaviconUrl = Clean(model.BrandFaviconUrl);
+            await _context.SaveChangesAsync();
+            return Ok(ToBrandingDto(customer));
+        }
+
+        // POST api/customers/5/branding/upload?type=logo-large|logo-small|favicon
+        [HttpPost("{id}/branding/upload")]
+        [Authorize(Roles = "AdminGlobal")]
+        [Consumes("multipart/form-data")]
+        [SwaggerOperation(Summary = "Subir logo o favicon del cliente", Description = "Imagen PNG/JPG/SVG/ICO/WebP, máx. 2 MB. Se achica y recomprime antes de guardarse. Devuelve la URL pública.")]
+        public async Task<IActionResult> UploadBranding(int id, [FromQuery] string type, IFormFile file)
+        {
+            var customer = await _context.Customers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id && c.Deleted == false);
+            if (customer == null) return NotFound(new { message = "El cliente no existe o fue eliminado." });
+
+            if (file == null || file.Length == 0) return BadRequest(new { message = "No se recibió ningún archivo." });
+            if (file.Length > 2 * 1024 * 1024) return BadRequest(new { message = "El archivo no puede superar 2 MB." });
+
+            var allowedMimes = new[] { "image/png", "image/jpeg", "image/jpg", "image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon", "image/webp" };
+            if (!allowedMimes.Contains(file.ContentType.ToLower()))
+                return BadRequest(new { message = "Solo se permiten imágenes (PNG, JPG, SVG, ICO, WebP)." });
+
+            var validTypes = new[] { "logo-large", "logo-small", "favicon" };
+            if (!validTypes.Contains(type))
+                return BadRequest(new { message = "El parámetro 'type' debe ser: logo-large, logo-small o favicon." });
+
+            var (maxW, maxH) = type switch { "logo-small" => (256, 256), "favicon" => (128, 128), _ => (600, 200) };
+            using var inStream = file.OpenReadStream();
+            var optimized = ProfetAPI.Services.ImageOptimizer.Optimize(inStream, file.ContentType, maxW, maxH);
+            if (optimized == null) return BadRequest(new { message = "El archivo no es una imagen válida." });
+
+            var folder = Path.Combine(ProfetAPI.Services.UploadStorage.Root(_webHostEnvironment), "branding", customer.Id.ToString());
+            Directory.CreateDirectory(folder);
+            var fileName = $"{type}_{customer.Id}{optimized.Extension}";
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(folder, fileName), optimized.Bytes);
+
+            var baseUrl = _apiBaseUrl ?? $"{Request.Scheme}://{Request.Host}";
+            var publicUrl = $"{baseUrl}/uploads/branding/{customer.Id}/{fileName}?v={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+            return Ok(new { url = publicUrl, type });
         }
 
         private async Task<List<string>> GrantLegacyGiftsAsync(Customer customer)
