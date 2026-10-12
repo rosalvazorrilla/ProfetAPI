@@ -74,6 +74,7 @@ public class LeadsController : ControllerBase
         [FromQuery] bool noSequence = false,
         [FromQuery] bool noReply = false,
         [FromQuery] int? noMovementDays = null,
+        [FromQuery] string? alert = null,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50)
     {
@@ -164,6 +165,20 @@ public class LeadsController : ControllerBase
             var movementCutoff = DateTime.UtcNow.AddDays(-noMovementDays.Value);
             query = query.Where(l => !_context.TimelineEvents.Any(t =>
                 t.EntityType == "Lead" && t.EntityId == l.LeadId && t.CreatedOn > movementCutoff));
+        }
+
+        // Alertas del dashboard (mismos criterios que /api/dashboard/best-practices) — para listar TODOS los que la disparan.
+        if (!string.IsNullOrWhiteSpace(alert))
+        {
+            var nowUtc = DateTime.UtcNow;
+            query = alert switch
+            {
+                "newOver24h" => query.Where(l => l.Status == "Nuevo" && l.CreatedOn < nowUtc.AddHours(-24)),
+                "newOver1h"  => query.Where(l => l.Status == "Nuevo" && l.CreatedOn < nowUtc.AddHours(-1) && l.CreatedOn >= nowUtc.AddHours(-24)),
+                "unassigned" => query.Where(l => l.OwnerUserId == null),
+                "qualified"  => query.Where(l => l.Status == "Calificado"),
+                _ => query,
+            };
         }
 
         var total = await query.CountAsync();
