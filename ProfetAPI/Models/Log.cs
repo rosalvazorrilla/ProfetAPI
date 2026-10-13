@@ -12,7 +12,7 @@ public class Log
     [Column("name")]
     public string Name { get; set; } = null!;
     [Column("message")]
-    public string Message { get; set; } = null!;
+    public string? Message { get; set; } // la columna admite NULL; con string no-nulo el visor de logs reventaba al leer esas filas
     [Column("type")]
     public string? Type { get; set; }
 }

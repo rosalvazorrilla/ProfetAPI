@@ -24,14 +24,17 @@ public class DealsController : ControllerBase
     private readonly ProfetAPI.Services.ITimelineLogger _timeline;
     private readonly ProfetAPI.Services.PlaybookService _playbooks;
     private readonly ProfetAPI.Services.INextActionService _nextAction;
+    private readonly IWebHostEnvironment _env;
 
     public DealsController(
         ApplicationDbContext context,
         ProfetAPI.Services.AutomationExecutorService automations,
         ProfetAPI.Services.ITimelineLogger timeline,
         ProfetAPI.Services.PlaybookService playbooks,
-        ProfetAPI.Services.INextActionService nextAction)
+        ProfetAPI.Services.INextActionService nextAction,
+        IWebHostEnvironment env)
     {
+        _env = env;
         _context     = context;
         _automations = automations;
         _timeline    = timeline;
@@ -705,6 +708,191 @@ public class DealsController : ControllerBase
         return Ok(new { added = true });
     }
 
+    // ── Acceso a un deal (misma regla que el detalle) ─────────────────────────────
+    private async Task<(Deal? deal, IActionResult? error)> AccessibleDealAsync(int id, bool track = false)
+    {
+        var q = track ? _context.Deals : _context.Deals.AsNoTracking();
+        var deal = await q.FirstOrDefaultAsync(d => d.DealId == id);
+        if (deal == null) return (null, NotFound(new { message = "Oportunidad no encontrada." }));
+        if (!IsAdminGlobal)
+        {
+            var belongs = await _context.AccountInternalUsers
+                .AnyAsync(a => a.AccountId == deal.AccountId && a.UserId == CurrentUserId);
+            if (!belongs) return (null, Forbid());
+        }
+        return (deal, null);
+    }
+
+    private async Task<Dictionary<string, string>> AuthorNamesAsync(IEnumerable<string?> ids)
+    {
+        var authorIds = ids.Where(i => i != null).Select(i => i!).Distinct().ToList();
+        return await _context.Users.AsNoTracking().Where(u => authorIds.Contains(u.Id))
+            .Select(u => new { u.Id, Name = u.UserProfile != null ? (u.UserProfile.FirstName + " " + u.UserProfile.LastName) : u.Email })
+            .ToDictionaryAsync(u => u.Id, u => (u.Name ?? "").Trim());
+    }
+
+    // PUT /api/deals/{id} — guarda los datos generales de la oportunidad
+    [HttpPut("{id:int}")]
+    [SwaggerOperation(Summary = "Actualizar los datos generales de una oportunidad")]
+    public async Task<IActionResult> UpdateDeal(int id, [FromBody] DealUpdateDto dto)
+    {
+        var (deal, err) = await AccessibleDealAsync(id, track: true);
+        if (err != null) return err;
+
+        var name = (dto.DealName ?? "").Trim();
+        if (name.Length == 0) return BadRequest(new { message = "El nombre del trato es obligatorio." });
+        if (dto.QuotedAmount is < 0 || dto.FinalAmount is < 0) return BadRequest(new { message = "Los montos no pueden ser negativos." });
+
+        deal!.DealName = name.Length > 200 ? name[..200] : name;
+        deal.QuotedAmount = dto.QuotedAmount;
+        deal.FinalAmount = dto.FinalAmount;
+        deal.ProspectSource = string.IsNullOrWhiteSpace(dto.ProspectSource) ? null : dto.ProspectSource.Trim();
+        if (!string.IsNullOrWhiteSpace(dto.DealType)) deal.DealType = dto.DealType.Trim();
+        deal.CloseDate = dto.CloseDate?.Date;
+        await _context.SaveChangesAsync();
+
+        await _timeline.LogAsync(deal.AccountId, "Deal", id, "update", "Actualizó la información general", userId: CurrentUserId);
+        return Ok(new { dealId = deal.DealId, dealName = deal.DealName, quotedAmount = deal.QuotedAmount, finalAmount = deal.FinalAmount,
+                        prospectSource = deal.ProspectSource, dealType = deal.DealType, closeDate = deal.CloseDate });
+    }
+
+    // GET /api/deals/{id}/notes — notas de la oportunidad con su autor
+    [HttpGet("{id:int}/notes")]
+    [SwaggerOperation(Summary = "Notas de la oportunidad")]
+    public async Task<IActionResult> GetNotes(int id)
+    {
+        var (_, err) = await AccessibleDealAsync(id);
+        if (err != null) return err;
+
+        var notes = await _context.TimelineEvents.AsNoTracking()
+            .Where(e => !e.Deleted && e.EntityType == "Deal" && e.EntityId == id && e.Type == "note")
+            .OrderByDescending(e => e.CreatedOn).Take(100)
+            .Select(e => new { e.TimelineEventId, text = e.Detail, e.CreatedOn, e.CreatedByUserId })
+            .ToListAsync();
+        var names = await AuthorNamesAsync(notes.Select(n => n.CreatedByUserId));
+        return Ok(notes.Select(n => new
+        {
+            id = n.TimelineEventId, n.text, n.CreatedOn,
+            author = n.CreatedByUserId != null && names.TryGetValue(n.CreatedByUserId, out var nm) ? nm : null,
+            mine = n.CreatedByUserId == CurrentUserId,
+        }));
+    }
+
+    // DELETE /api/deals/{id}/notes/{noteId} — la borra su autor o un AdminGlobal
+    [HttpDelete("{id:int}/notes/{noteId:long}")]
+    [SwaggerOperation(Summary = "Eliminar una nota de la oportunidad")]
+    public async Task<IActionResult> DeleteNote(int id, long noteId)
+    {
+        var (_, err) = await AccessibleDealAsync(id);
+        if (err != null) return err;
+        var note = await _context.TimelineEvents.FirstOrDefaultAsync(e => e.TimelineEventId == noteId
+            && e.EntityType == "Deal" && e.EntityId == id && e.Type == "note" && !e.Deleted);
+        if (note == null) return NotFound(new { message = "Nota no encontrada." });
+        if (!IsAdminGlobal && note.CreatedByUserId != CurrentUserId) return Forbid();
+        note.Deleted = true;
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+
+    // ── Documentos de la oportunidad (archivos privados; el registro vive en el timeline) ──
+    private static readonly HashSet<string> DocExtensions = new(StringComparer.OrdinalIgnoreCase)
+        { ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".png", ".jpg", ".jpeg", ".zip" };
+    private const long MaxDocBytes = 10 * 1024 * 1024;
+
+    private string DealDocFolder(int dealId) => Path.Combine(ProfetAPI.Services.UploadStorage.PrivateRoot(_env), "deal-docs", dealId.ToString());
+
+    private record DocMeta(string Stored, long Size, string? ContentType);
+
+    // GET /api/deals/{id}/documents
+    [HttpGet("{id:int}/documents")]
+    [SwaggerOperation(Summary = "Documentos de la oportunidad")]
+    public async Task<IActionResult> GetDocuments(int id)
+    {
+        var (_, err) = await AccessibleDealAsync(id);
+        if (err != null) return err;
+
+        var docs = await _context.TimelineEvents.AsNoTracking()
+            .Where(e => !e.Deleted && e.EntityType == "Deal" && e.EntityId == id && e.Type == "document")
+            .OrderByDescending(e => e.CreatedOn).Take(200)
+            .Select(e => new { e.TimelineEventId, e.Title, e.MetaJson, e.CreatedOn, e.CreatedByUserId })
+            .ToListAsync();
+        var names = await AuthorNamesAsync(docs.Select(d => d.CreatedByUserId));
+        return Ok(docs.Select(d =>
+        {
+            long size = 0;
+            try { size = System.Text.Json.JsonSerializer.Deserialize<DocMeta>(d.MetaJson ?? "{}", new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })?.Size ?? 0; } catch { /* meta dañada */ }
+            return new
+            {
+                id = d.TimelineEventId, name = d.Title, size, d.CreatedOn,
+                author = d.CreatedByUserId != null && names.TryGetValue(d.CreatedByUserId, out var nm) ? nm : null,
+            };
+        }));
+    }
+
+    // POST /api/deals/{id}/documents (multipart, campo "file")
+    [HttpPost("{id:int}/documents")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(12 * 1024 * 1024)]
+    [SwaggerOperation(Summary = "Subir un documento a la oportunidad", Description = "Máx. 10 MB. PDF, Office, imágenes, TXT/CSV o ZIP.")]
+    public async Task<IActionResult> UploadDocument(int id, IFormFile file)
+    {
+        var (deal, err) = await AccessibleDealAsync(id);
+        if (err != null) return err;
+        if (file == null || file.Length == 0) return BadRequest(new { message = "No se recibió ningún archivo." });
+        if (file.Length > MaxDocBytes) return BadRequest(new { message = "El archivo no puede superar 10 MB." });
+
+        var displayName = Path.GetFileName(file.FileName);
+        var ext = Path.GetExtension(displayName);
+        if (!DocExtensions.Contains(ext))
+            return BadRequest(new { message = "Tipo de archivo no permitido. Usa PDF, Word, Excel, PowerPoint, imagen, TXT, CSV o ZIP." });
+
+        var stored = $"{Guid.NewGuid():N}{ext.ToLowerInvariant()}";
+        var folder = DealDocFolder(id);
+        Directory.CreateDirectory(folder);
+        await using (var fs = System.IO.File.Create(Path.Combine(folder, stored)))
+            await file.CopyToAsync(fs);
+
+        await _timeline.LogAsync(deal!.AccountId, "Deal", id, "document", displayName.Length > 200 ? displayName[..200] : displayName,
+            meta: new DocMeta(stored, file.Length, file.ContentType), userId: CurrentUserId);
+        return Ok(new { added = true });
+    }
+
+    // GET /api/deals/{id}/documents/{docId}/download
+    [HttpGet("{id:int}/documents/{docId:long}/download")]
+    [SwaggerOperation(Summary = "Descargar un documento de la oportunidad")]
+    public async Task<IActionResult> DownloadDocument(int id, long docId)
+    {
+        var (_, err) = await AccessibleDealAsync(id);
+        if (err != null) return err;
+        var ev = await _context.TimelineEvents.AsNoTracking().FirstOrDefaultAsync(e => e.TimelineEventId == docId
+            && e.EntityType == "Deal" && e.EntityId == id && e.Type == "document" && !e.Deleted);
+        if (ev == null) return NotFound(new { message = "Documento no encontrado." });
+
+        DocMeta? meta = null;
+        try { meta = System.Text.Json.JsonSerializer.Deserialize<DocMeta>(ev.MetaJson ?? "{}", new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }); } catch { /* */ }
+        if (meta == null || string.IsNullOrEmpty(meta.Stored)) return NotFound(new { message = "Documento no encontrado." });
+
+        var path = Path.Combine(DealDocFolder(id), Path.GetFileName(meta.Stored)); // GetFileName: nunca sale de la carpeta
+        if (!System.IO.File.Exists(path)) return NotFound(new { message = "El archivo ya no está disponible." });
+        return PhysicalFile(path, string.IsNullOrWhiteSpace(meta.ContentType) ? "application/octet-stream" : meta.ContentType, ev.Title);
+    }
+
+    // DELETE /api/deals/{id}/documents/{docId} — lo borra quien lo subió o un AdminGlobal
+    [HttpDelete("{id:int}/documents/{docId:long}")]
+    [SwaggerOperation(Summary = "Eliminar un documento de la oportunidad")]
+    public async Task<IActionResult> DeleteDocument(int id, long docId)
+    {
+        var (_, err) = await AccessibleDealAsync(id);
+        if (err != null) return err;
+        var ev = await _context.TimelineEvents.FirstOrDefaultAsync(e => e.TimelineEventId == docId
+            && e.EntityType == "Deal" && e.EntityId == id && e.Type == "document" && !e.Deleted);
+        if (ev == null) return NotFound(new { message = "Documento no encontrado." });
+        if (!IsAdminGlobal && ev.CreatedByUserId != CurrentUserId) return Forbid();
+        ev.Deleted = true; // el archivo queda en disco; el registro deja de verse
+        await _context.SaveChangesAsync();
+        return NoContent();
+    }
+
     /// <summary>Clasifica una etapa como "won"/"lost"/"" según palabras clave en su nombre.</summary>
     private static string ClassifyStage(string name)
     {
@@ -901,4 +1089,14 @@ public class MoveStageDto
 public class DealNoteDto
 {
     public string Text { get; set; } = "";
+}
+
+public class DealUpdateDto
+{
+    public string? DealName { get; set; }
+    public decimal? QuotedAmount { get; set; }
+    public decimal? FinalAmount { get; set; }
+    public string? ProspectSource { get; set; }
+    public string? DealType { get; set; }
+    public DateTime? CloseDate { get; set; }
 }

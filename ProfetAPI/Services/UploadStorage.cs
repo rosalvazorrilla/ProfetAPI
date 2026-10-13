@@ -16,4 +16,14 @@ public static class UploadStorage
             return Path.Combine(home, "data", "uploads");
         return Path.Combine(env.WebRootPath ?? Path.Combine(env.ContentRootPath, "wwwroot"), "uploads");
     }
+
+    /// <summary>Archivos privados (documentos de oportunidades): NO se sirven como estáticos, solo por endpoints con autorización.</summary>
+    public static string PrivateRoot(IWebHostEnvironment env)
+    {
+        var onAzure = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WEBSITE_SITE_NAME"));
+        var home = Environment.GetEnvironmentVariable("HOME");
+        if (onAzure && !string.IsNullOrEmpty(home))
+            return Path.Combine(home, "data", "private");
+        return Path.Combine(env.ContentRootPath, "App_Data", "private");
+    }
 }

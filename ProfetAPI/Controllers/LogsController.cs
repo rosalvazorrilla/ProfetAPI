@@ -41,7 +41,7 @@ public class LogsController : ControllerBase
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim();
-            q = q.Where(l => l.Name.Contains(s) || l.Message.Contains(s));
+            q = q.Where(l => l.Name.Contains(s) || (l.Message != null && l.Message.Contains(s)));
         }
 
         var total = await q.CountAsync();
