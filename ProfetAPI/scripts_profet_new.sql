@@ -165,7 +165,17 @@
 --   EJECUTADA (Claude vía sqlcmd).
 
 -- ── DDL PENDIENTE DE EJECUTAR (correr contra Profet_new antes de desplegar) ──
--- (nada pendiente por ahora)
+
+-- Sección J (2026-11-09) — ÍNDICE de Notifications. NO EJECUTADO.
+-- Medido en prod: GET /api/notifications tarda 14-15 s de forma constante (tabla de ~1.48 M de filas sin índice
+-- por UserId: cada consulta recorre toda la tabla dos veces — la lista y el conteo de no leídas).
+-- Idempotente y ONLINE (no bloquea escrituras). Puede tardar unos minutos en una tabla grande.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Notifications_UserId_Date' AND object_id = OBJECT_ID('dbo.Notifications'))
+    CREATE NONCLUSTERED INDEX IX_Notifications_UserId_Date
+        ON dbo.Notifications (UserId, [Date] DESC)
+        INCLUDE (Status)
+        WITH (ONLINE = ON);
+GO
 
 -- ── PENDIENTE DE DECISIÓN (no técnico, no se genera DDL hasta que se decida) ──
 -- 32 tablas huérfanas en Profet_new SÍ tienen datos reales (nadie las lee hoy;
