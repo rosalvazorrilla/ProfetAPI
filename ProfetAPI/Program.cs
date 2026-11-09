@@ -272,31 +272,48 @@ builder.Services.AddSwaggerGen(c =>
         Type = SecuritySchemeType.ApiKey
     });
 
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement()
-    {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                },
-                Scheme = "oauth2",
-                Name = "Bearer",
-                In = ParameterLocation.Header,
-            },
-            new List<string>()
-        }
-    });
+    // Cada endpoint pide el candado que le toca: /api/external → API Key, el resto → JWT.
+    c.OperationFilter<ProfetAPI.Services.SwaggerSecurityFilter>();
 
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement()
+    // Segundo documento: SOLO la API externa, con guía de uso para que el cliente integre sin ayuda.
+    c.SwaggerDoc("external", new OpenApiInfo
     {
-        {
-            new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" } },
-            new List<string>()
-        }
+        Title = "Profet API Externa",
+        Version = "v1",
+        Description = """
+            API para que tu sistema (sitio web, landing, Zapier, otro CRM) cree y consulte **prospectos, contactos, empresas y tratos** en Profet.
+
+            ### 1. Autenticación
+            Cada petición debe llevar tu **API Key** en el header `X-Api-Key`. La genera el administrador de tu cuenta en Profet; está atada a **una sola cuenta (campaña)**, así que solo ves y modificas los datos de esa cuenta. Si se revoca, deja de funcionar al instante.
+            En esta página pulsa **Authorize**, pega la llave y podrás probar los endpoints con *Try it out*.
+
+            ### 2. Primera prueba
+            `GET /api/external/me` → si responde 200 con el nombre de tu cuenta, la llave funciona.
+
+            ### 3. Flujo típico
+            - **Capturar un prospecto:** `POST /api/external/leads` (manda al menos nombre, email o teléfono). Antes puedes revisar duplicados con `GET /api/external/leads?email=...`.
+            - **Sacar datos:** `GET /api/external/leads`, `/contacts`, `/companies`, `/deals` con filtros y paginación (`page`, `pageSize` hasta 200).
+            - **Funnel:** `GET /api/external/funnel` te da las etapas; sus `stageId` filtran prospectos y tratos.
+
+            ### 4. Respuestas y errores
+            | Código | Significa |
+            |---|---|
+            | 200 / 201 | Correcto |
+            | 400 | Faltan datos o son inválidos (el cuerpo trae `message`) |
+            | 401 | API Key ausente, inválida o revocada |
+            | 403 | La API externa no está incluida en el plan de la cuenta |
+            | 404 | El registro no existe **en tu cuenta** |
+            | 429 | Demasiadas peticiones: el límite es **120 por minuto** por llave; espera el tiempo de `Retry-After` |
+
+            ### 5. Notas
+            - Las fechas están en **UTC**.
+            - Las listas devuelven `total`, `page`, `pageSize` y el arreglo de resultados.
+            - Los `PATCH`/`PUT` son parciales: solo se cambian los campos que mandes.
+            """
     });
+    c.DocInclusionPredicate((docName, api) =>
+        docName != "external" || (api.ActionDescriptor is Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor cad
+                                  && cad.ControllerTypeInfo.AsType() == typeof(ProfetAPI.Controllers.ExternalApiController)));
 
     // D. Integrar comentarios XML (Para que el front lea tus explicaciones)
     // NOTA: Aseg�rate de haber hecho el paso del .csproj antes de correr esto
@@ -348,7 +365,8 @@ app.UseExceptionHandler(errApp =>
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Profet API v1");
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Profet API v1 (completa)");
+    c.SwaggerEndpoint("/swagger/external/swagger.json", "API Externa (integraciones)");
     c.RoutePrefix = string.Empty; // Opcional: Esto pone Swagger en la p�gina principal
 });
 
