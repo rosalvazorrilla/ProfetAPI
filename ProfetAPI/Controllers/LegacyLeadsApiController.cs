@@ -24,6 +24,7 @@ namespace ProfetAPI.Controllers;
 [Route("api/leadsapi")]
 [ApiController]
 [AllowAnonymous]
+[Microsoft.AspNetCore.Cors.EnableCors("public")]
 [SwaggerTag("Compatibilidad — Landing pages viejas (usar api/external/leads en integraciones nuevas)")]
 public class LegacyLeadsApiController : ControllerBase
 {

@@ -19,6 +19,7 @@ namespace ProfetAPI.Controllers;
 [ApiController]
 [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("public-api")]
 [AllowAnonymous]
+[Microsoft.AspNetCore.Cors.EnableCors("public")]
 [SwaggerTag("API Externa — Integraciones (autenticación por API Key)")]
 public class ExternalApiController : ControllerBase
 {

@@ -50,6 +50,7 @@ namespace ProfetAPI.Controllers
         // GET /api/branding/defaults
         [HttpGet("defaults")]
         [AllowAnonymous]
+        [Microsoft.AspNetCore.Cors.EnableCors("public")]
         [SwaggerOperation(
             Summary = "Obtener branding global de la plataforma (público)",
             Description = "Sin autenticación. Devuelve los logos y colores por defecto del sistema. Usar como fallback cuando el tenant no tiene marca configurada."

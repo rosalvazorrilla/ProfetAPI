@@ -25,8 +25,11 @@ public class TwoChatService
     public async Task<(string? receiveId, string? sentId)> SubscribeWebhooks(string phoneNumber, string? customApiKey = null)
     {
         var apiKey = customApiKey ?? GlobalApiKey;
-        var receiveId = await Subscribe(apiKey, phoneNumber, "whatsapp.message.received", $"{WebhookBaseUrl}/api/whatsapp/webhook");
-        var sentId    = await Subscribe(apiKey, phoneNumber, "whatsapp.message.sent",     $"{WebhookBaseUrl}/api/whatsapp/webhook/sent");
+        // Si hay secreto configurado, las URLs nuevas lo llevan; los webhooks viejos se re-registran al reconfigurar el canal.
+        var secret = _config["TwoChat:WebhookSecret"];
+        var qs = string.IsNullOrEmpty(secret) ? "" : "?secret=" + Uri.EscapeDataString(secret);
+        var receiveId = await Subscribe(apiKey, phoneNumber, "whatsapp.message.received", $"{WebhookBaseUrl}/api/whatsapp/webhook{qs}");
+        var sentId    = await Subscribe(apiKey, phoneNumber, "whatsapp.message.sent",     $"{WebhookBaseUrl}/api/whatsapp/webhook/sent{qs}");
         return (receiveId, sentId);
     }
 

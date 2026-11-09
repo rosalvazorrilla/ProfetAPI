@@ -60,9 +60,34 @@ builder.Services.AddAuthentication(options =>
 // --- 4. Configuraci�n de CORS ---
 // SetIsOriginAllowed permite cualquier origen pero con AllowCredentials,
 // que SignalR necesita para WebSockets (AllowAnyOrigin() + AllowCredentials() son incompatibles).
+// Política por defecto (la app web y SignalR): solo orígenes conocidos — Frontend:BaseUrl, Cors:AllowedOrigins
+// (dominios propios, separados por coma), localhost y los hosts de Azure (*.azurewebsites.net / *.azurestaticapps.net).
+// Política "public" (landing pages, API externa, webhooks): cualquier origen, igual que antes, para no romper integraciones.
+var corsExtra = (configuration["Cors:AllowedOrigins"] ?? "")
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .Select(o => o.TrimEnd('/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
+var corsFrontend = configuration["Frontend:BaseUrl"]?.TrimEnd('/');
+if (!string.IsNullOrEmpty(corsFrontend)) corsExtra.Add(corsFrontend);
+
+static bool IsKnownOrigin(string origin, HashSet<string> extra)
+{
+    if (extra.Contains(origin.TrimEnd('/'))) return true;
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var u)) return false;
+    var h = u.Host.ToLowerInvariant();
+    if (h == "localhost" || h == "127.0.0.1") return true;
+    return u.Scheme == "https" && (h.EndsWith(".azurewebsites.net") || h.EndsWith(".azurestaticapps.net"));
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
+    {
+        policy.SetIsOriginAllowed(o => IsKnownOrigin(o, corsExtra))
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
+    options.AddPolicy("public", policy =>
     {
         policy.SetIsOriginAllowed(_ => true)
               .AllowAnyHeader()
@@ -184,6 +209,10 @@ builder.Services.AddRateLimiter(o =>
             _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 });
     });
 
+    // Webhooks de proveedores (2Chat, CallPicker): 600 por minuto por IP de origen
+    o.AddPolicy("webhook-ip", http => RateLimitPartition.GetFixedWindowLimiter("whip:" + ClientIp(http),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 600, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+
     // Webhooks de entrada (Meta, formularios…): 300 por minuto por webhook
     o.AddPolicy("webhook-in", http =>
     {
@@ -234,6 +263,15 @@ builder.Services.AddSwaggerGen(c =>
         Scheme = "Bearer"
     });
 
+    // API Key para la API externa (/api/external/*): el botón Authorize permite pegarla y probar sin JWT.
+    c.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
+    {
+        Description = "API Key del cliente (la genera el administrador de la cuenta en la configuración de la cuenta). Se manda en el header X-Api-Key y aplica a /api/external/*.",
+        Name = "X-Api-Key",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey
+    });
+
     c.AddSecurityRequirement(new OpenApiSecurityRequirement()
     {
         {
@@ -248,6 +286,14 @@ builder.Services.AddSwaggerGen(c =>
                 Name = "Bearer",
                 In = ParameterLocation.Header,
             },
+            new List<string>()
+        }
+    });
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement()
+    {
+        {
+            new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" } },
             new List<string>()
         }
     });

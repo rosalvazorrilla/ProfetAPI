@@ -139,11 +139,12 @@ public class CallsController : ControllerBase
     // POST /api/calls/webhook?token=...
     [HttpPost("webhook")]
     [AllowAnonymous]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("webhook-ip")]
     [SwaggerOperation(Summary = "Webhook de CallPicker — registra cada llamada finalizada (entrante o saliente)")]
     public async Task<IActionResult> Webhook([FromQuery] string? token)
     {
         var expected = _config["CallPicker:WebhookToken"];
-        if (string.IsNullOrEmpty(expected) || token != expected) return Unauthorized();
+        if (!ProfetAPI.Services.WebhookSecurity.SecretsMatch(expected, token)) return Unauthorized();
 
         string raw;
         using (var reader = new StreamReader(Request.Body))

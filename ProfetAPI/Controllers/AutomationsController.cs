@@ -268,6 +268,8 @@ public class AutomationsController : ControllerBase
 
 [Route("api/receive/auto")]
 [ApiController]
+[Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("webhook-in")]
+[Microsoft.AspNetCore.Cors.EnableCors("public")]
 [SwaggerTag("CRM — Receptor genérico de webhooks de automatización")]
 public class AutomationWebhookReceiverController : ControllerBase
 {

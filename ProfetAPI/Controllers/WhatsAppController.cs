@@ -344,9 +344,12 @@ public class WhatsAppController : ControllerBase
     /// </summary>
     [HttpPost("webhook")]
     [AllowAnonymous]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("webhook-ip")]
     [SwaggerOperation(Summary = "Webhook mensajes entrantes (2Chat)", Tags = new[] { "WhatsApp" })]
     public async Task<IActionResult> IncomingWebhook()
     {
+        if (!ProfetAPI.Services.WebhookSecurity.IsTwoChatWebhookAuthorized(HttpContext.RequestServices.GetRequiredService<IConfiguration>(), Request))
+            return Unauthorized();
         try
         {
             var jsonString = await new StreamReader(Request.Body).ReadToEndAsync();
@@ -362,7 +365,7 @@ public class WhatsAppController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error en IncomingWebhook");
-            return StatusCode(500, ex.Message);
+            return StatusCode(500, "Error procesando el webhook.");
         }
     }
 
@@ -372,9 +375,12 @@ public class WhatsAppController : ControllerBase
     /// </summary>
     [HttpPost("webhook/sent")]
     [AllowAnonymous]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("webhook-ip")]
     [SwaggerOperation(Summary = "Webhook mensajes salientes (2Chat)", Tags = new[] { "WhatsApp" })]
     public async Task<IActionResult> SentWebhook()
     {
+        if (!ProfetAPI.Services.WebhookSecurity.IsTwoChatWebhookAuthorized(HttpContext.RequestServices.GetRequiredService<IConfiguration>(), Request))
+            return Unauthorized();
         try
         {
             var jsonString = await new StreamReader(Request.Body).ReadToEndAsync();
@@ -390,7 +396,7 @@ public class WhatsAppController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error en SentWebhook");
-            return StatusCode(500, ex.Message);
+            return StatusCode(500, "Error procesando el webhook.");
         }
     }
 
