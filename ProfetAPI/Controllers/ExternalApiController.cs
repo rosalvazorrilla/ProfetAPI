@@ -28,9 +28,11 @@ public class ExternalApiController : ControllerBase
     private readonly ITimelineLogger _timeline;
     private readonly LeadAssignmentService _assignment;
     private readonly IngestionLogger _ingestionLog;
+    private readonly PlaybookService _playbooks;
 
-    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys, ITimelineLogger timeline, LeadAssignmentService assignment, IngestionLogger ingestionLog)
+    public ExternalApiController(ApplicationDbContext context, ApiKeyService apiKeys, ITimelineLogger timeline, LeadAssignmentService assignment, IngestionLogger ingestionLog, PlaybookService playbooks)
     {
+        _playbooks = playbooks;
         _context = context;
         _apiKeys = apiKeys;
         _timeline = timeline;
@@ -141,6 +143,10 @@ public class ExternalApiController : ControllerBase
             return StatusCode(500, new ApiMessage { Message = "No se pudo crear el prospecto. Ya quedó registrado el error para revisión." });
         }
         _ = _ingestionLog.LogAsync("ApiKey", $"Cuenta {key.AccountId} ({key.Name}) — Lead {lead.LeadId}: {lead.Name}");
+
+        // Igual que cualquier otro canal de entrada: genera las tareas del playbook predeterminado de la cuenta.
+        try { await _playbooks.ApplyDefaultAsync(key.AccountId, lead.LeadId, lead.OwnerUserId); }
+        catch { /* las tareas de seguimiento nunca deben tumbar la creación del prospecto */ }
 
         return CreatedAtAction(nameof(GetLead), new { id = lead.LeadId }, new ExternalLeadCreated
         {
