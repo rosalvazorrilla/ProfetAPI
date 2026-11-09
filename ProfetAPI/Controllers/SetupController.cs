@@ -1369,11 +1369,34 @@ namespace ProfetAPI.Controllers
             return Ok(stages);
         }
 
+        // Playbook que maneja el wizard para una cuenta: el predeterminado y, si no hay ninguno marcado,
+        // la primera secuencia asignada a la cuenta (así el wizard y Configuración > Secuencias ven LA MISMA).
+        private async Task<(ActivityPlaybook? playbook, PlaybookAccountAssignment? assignment)> FindAccountPlaybookAsync(int accountId, bool track)
+        {
+            var q = _context.PlaybookAccountAssignments
+                .Where(a => a.AccountId == accountId && !a.Playbook.Deleted);
+            if (!track) q = q.AsNoTracking();
+            var assignment = await q.Include(a => a.Playbook).ThenInclude(p => p.Tasks)
+                .OrderByDescending(a => a.IsDefault).ThenBy(a => a.PlaybookId)
+                .FirstOrDefaultAsync();
+            return (assignment?.Playbook, assignment);
+        }
+
+        private static object PlaybookToDto(ActivityPlaybook p, bool isDefault) => new
+        {
+            p.PlaybookId, p.Name, p.Description, p.IsActive, IsDefault = isDefault, p.GatingMode,
+            tasks = p.Tasks.OrderBy(t => t.Order).Select(t => new
+            {
+                t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId, t.Description, t.Order, t.Priority, t.OffsetDays,
+                t.AutomationMode, t.TemplateId,
+            }),
+        };
+
         // GET /api/setup/accounts/{accountId}/playbook?token=
         [HttpGet("accounts/{accountId}/playbook")]
-        [SwaggerOperation(Summary = "Playbook predeterminado de la cuenta (secuencia de tareas al crear un lead)")]
-        [SwaggerResponse(200, "Playbook predeterminado")]
-        [SwaggerResponse(204, "La cuenta aún no tiene playbook")]
+        [SwaggerOperation(Summary = "Secuencia de tareas de la cuenta (la predeterminada, o la primera asignada)")]
+        [SwaggerResponse(200, "Secuencia de la cuenta")]
+        [SwaggerResponse(204, "La cuenta aún no tiene secuencia")]
         public async Task<IActionResult> GetSetupPlaybook([FromQuery] string token, int accountId)
         {
             var customer = await GetCustomerByToken(token);
@@ -1381,27 +1404,22 @@ namespace ProfetAPI.Controllers
             if (!await AccountBelongsToCustomer(accountId, customer.Id))
                 return NotFound(new { message = "Cuenta no encontrada." });
 
-            var playbook = await _context.PlaybookAccountAssignments
-                .Where(a => a.AccountId == accountId && a.IsDefault && !a.Playbook.Deleted)
-                .Select(a => a.Playbook)
-                .Include(p => p.Tasks)
-                .FirstOrDefaultAsync();
-            if (playbook == null) return NoContent();
-
-            return Ok(new
+            try
             {
-                playbook.PlaybookId, playbook.Name, playbook.Description, playbook.IsActive, playbook.IsDefault, playbook.GatingMode,
-                tasks = playbook.Tasks.OrderBy(t => t.Order).Select(t => new
-                {
-                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId, t.Description, t.Order, t.Priority, t.OffsetDays,
-                }),
-            });
+                var (playbook, assignment) = await FindAccountPlaybookAsync(accountId, track: false);
+                if (playbook == null) return NoContent();
+                return Ok(PlaybookToDto(playbook, assignment!.IsDefault));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error al leer las tareas predefinidas.", details = ex.Message });
+            }
         }
 
         // PUT /api/setup/accounts/{accountId}/playbook?token=
         [HttpPut("accounts/{accountId}/playbook")]
-        [SwaggerOperation(Summary = "Crear/actualizar el playbook predeterminado de la cuenta")]
-        [SwaggerResponse(200, "Playbook guardado")]
+        [SwaggerOperation(Summary = "Crear/actualizar la secuencia de tareas de la cuenta (misma que Configuración > Secuencias)")]
+        [SwaggerResponse(200, "Secuencia guardada")]
         public async Task<IActionResult> SaveSetupPlaybook([FromQuery] string token, int accountId, [FromBody] SetupPlaybookRequestDto req)
         {
             var customer = await GetCustomerByToken(token);
@@ -1410,61 +1428,67 @@ namespace ProfetAPI.Controllers
                 return NotFound(new { message = "Cuenta no encontrada." });
             if (string.IsNullOrWhiteSpace(req.Name)) return BadRequest(new { message = "El nombre es obligatorio." });
 
-            var assignment = await _context.PlaybookAccountAssignments
-                .Include(a => a.Playbook).ThenInclude(p => p.Tasks)
-                .FirstOrDefaultAsync(a => a.AccountId == accountId && a.IsDefault && !a.Playbook.Deleted);
-            var playbook = assignment?.Playbook;
+            try
+            {
+                var (playbook, assignment) = await FindAccountPlaybookAsync(accountId, track: true);
 
-            if (playbook == null)
-            {
-                playbook = new ActivityPlaybook { CustomerId = customer.Id, AccountId = accountId, Name = req.Name.Trim(), IsActive = true, IsDefault = true, Deleted = false };
-                _context.ActivityPlaybooks.Add(playbook);
-                await _context.SaveChangesAsync();
-                _context.PlaybookAccountAssignments.Add(new PlaybookAccountAssignment
+                if (playbook == null)
                 {
-                    PlaybookId = playbook.PlaybookId,
-                    AccountId  = accountId,
-                    IsDefault  = true,
-                });
-                await _context.SaveChangesAsync();
-            }
-            else
-            {
-                playbook.Name        = req.Name.Trim();
+                    // Playbook + asignación en un solo guardado: si algo falla no queda una secuencia huérfana.
+                    playbook = new ActivityPlaybook { CustomerId = customer.Id, AccountId = accountId, Name = req.Name.Trim(), IsActive = true, Deleted = false };
+                    playbook.AccountAssignments.Add(new PlaybookAccountAssignment { AccountId = accountId, IsDefault = true });
+                    _context.ActivityPlaybooks.Add(playbook);
+                }
+                else
+                {
+                    playbook.Name = req.Name.Trim();
+                    _context.PlaybookTasks.RemoveRange(playbook.Tasks);
+                    if (assignment != null && !assignment.IsDefault)
+                    {
+                        // Debe ser la que se aplica sola a los leads nuevos de la cuenta.
+                        assignment.IsDefault = true;
+                        var others = await _context.PlaybookAccountAssignments
+                            .Where(a => a.AccountId == accountId && a.PlaybookId != playbook.PlaybookId && a.IsDefault).ToListAsync();
+                        foreach (var o in others) o.IsDefault = false;
+                    }
+                }
+
                 playbook.Description = req.Description?.Trim();
-                _context.PlaybookTasks.RemoveRange(playbook.Tasks);
-            }
+                playbook.IsActive    = req.IsActive ?? playbook.IsActive;
+                playbook.GatingMode  = req.GatingMode == "Block" ? "Block" : "Warn";
 
-            playbook.GatingMode = req.GatingMode == "Block" ? "Block" : "Warn";
-
-            var steps = req.Tasks ?? new List<SetupPlaybookStepDto>();
-            for (int i = 0; i < steps.Count; i++)
-            {
-                _context.PlaybookTasks.Add(new PlaybookTask
+                var steps = req.Tasks ?? new List<SetupPlaybookStepDto>();
+                for (int i = 0; i < steps.Count; i++)
                 {
-                    PlaybookId    = playbook.PlaybookId,
-                    TaskName      = (steps[i].TaskName ?? "").Trim(),
-                    ActionType    = string.IsNullOrWhiteSpace(steps[i].ActionType) ? "Task" : steps[i].ActionType!,
-                    TargetStageId = steps[i].TargetStageId,
-                    StageId       = steps[i].StageId,
-                    Description   = steps[i].Description?.Trim(),
-                    Order         = i + 1,
-                    Priority      = string.IsNullOrWhiteSpace(steps[i].Priority) ? "Media" : steps[i].Priority!,
-                    OffsetDays    = Math.Max(0, steps[i].OffsetDays),
-                });
-            }
-            await _context.SaveChangesAsync();
+                    var s = steps[i];
+                    var actionType = string.IsNullOrWhiteSpace(s.ActionType) ? "Task" : s.ActionType!;
+                    // Envío automático solo para Email/WhatsApp con plantilla — igual que en Configuración.
+                    var auto = s.AutomationMode == "Automatico" && s.TemplateId != null && (actionType == "Email" || actionType == "WhatsApp");
+                    playbook.Tasks.Add(new PlaybookTask
+                    {
+                        TaskName       = (s.TaskName ?? "").Trim(),
+                        ActionType     = actionType,
+                        TargetStageId  = actionType == "AdvanceStage" ? s.TargetStageId : null,
+                        StageId        = s.StageId,
+                        Description    = s.Description?.Trim(),
+                        Order          = i + 1,
+                        Priority       = string.IsNullOrWhiteSpace(s.Priority) ? "Media" : s.Priority!,
+                        OffsetDays     = Math.Max(0, s.OffsetDays),
+                        AutomationMode = auto ? "Automatico" : "Manual",
+                        TemplateId     = auto ? s.TemplateId : null,
+                    });
+                }
+                await _context.SaveChangesAsync();
 
-            var saved = await _context.ActivityPlaybooks.Include(p => p.Tasks)
-                .FirstAsync(p => p.PlaybookId == playbook.PlaybookId);
-            return Ok(new
+                var saved = await _context.ActivityPlaybooks.AsNoTracking().Include(p => p.Tasks)
+                    .FirstAsync(p => p.PlaybookId == playbook.PlaybookId);
+                return Ok(PlaybookToDto(saved, true));
+            }
+            catch (Exception ex)
             {
-                saved.PlaybookId, saved.Name, saved.Description, saved.IsActive, saved.IsDefault, saved.GatingMode,
-                tasks = saved.Tasks.OrderBy(t => t.Order).Select(t => new
-                {
-                    t.TaskId, t.TaskName, t.ActionType, t.TargetStageId, t.StageId, t.Description, t.Order, t.Priority, t.OffsetDays,
-                }),
-            });
+                var inner = ex.InnerException?.Message ?? ex.Message;
+                return StatusCode(500, new { message = "No se pudieron guardar las tareas predefinidas.", details = inner });
+            }
         }
 
         // ════════════════════════════════════════════════════════════

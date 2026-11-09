@@ -25,6 +25,7 @@ namespace ProfetAPI.Dtos
         public string  Name        { get; set; } = "";
         public string? Description { get; set; }
         public string? GatingMode  { get; set; } = "Warn";   // "Block" | "Warn"
+        public bool?   IsActive    { get; set; }
         public List<SetupPlaybookStepDto>? Tasks { get; set; }
     }
 
@@ -37,6 +38,8 @@ namespace ProfetAPI.Dtos
         public string? Description   { get; set; }
         public string? Priority      { get; set; }
         public int     OffsetDays    { get; set; }
+        public string? AutomationMode { get; set; }   // "Manual" | "Automatico"
+        public int?    TemplateId    { get; set; }
     }
 
     public class SetupStatusDto
